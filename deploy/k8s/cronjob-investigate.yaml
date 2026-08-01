@@ -39,7 +39,11 @@ spec:
             - name: verdict
               image: verdict
               imagePullPolicy: IfNotPresent
-              args: ["investigate", "--since", "2h"]
+              # No --start: the window then anchors on the newest bucket in the rollup and walks
+              # back two hours, which is what a two-hourly sweep wants. Anchoring on wall-clock
+              # "now" instead would report calm whenever ingestion had stalled, because an empty
+              # window looks exactly like a quiet one.
+              args: ["investigate", "--hours", "2"]
               envFrom:
                 - configMapRef:
                     name: verdict-env
