@@ -62,9 +62,18 @@ CASE_COLUMNS = (
     "impact_json",
     "narrative",
     "narrative_source",
+    "narrative_model",
+    "narrative_verified",
+    "narrative_rejected",
+    "narrative_prompt_tokens",
+    "narrative_completion_tokens",
+    "narrative_latency_ms",
     "fingerprint",
     "trace_id",
     "recurrence_of",
+    "detector",
+    "mode",
+    "cells_tested",
 )
 
 CANDIDATE_COLUMNS = (
@@ -97,6 +106,7 @@ STEP_COLUMNS = (
     "result",
     "sql",
     "duration_ms",
+    "offset_ms",
     "span_id",
 )
 
@@ -188,8 +198,23 @@ class Impact:
         }
 
 
+def _short(units: float, noun: str, over: int, denominator: str) -> str:
+    """Describe a movement in units without assuming which way it went."""
+    if units < 0:
+        return f"{abs(units):,.0f} {noun} short of expectation across {over:,} {denominator}"
+    return f"{units:,.0f} {noun} above expectation across {over:,} {denominator}"
+
+
 def estimate_impact(metric: str, observed: Counters, observed_value: float, expected_value: float) -> Impact:
-    """Convert a rate deviation into units lost, and into money where the funnel permits it.
+    """Convert a rate deviation into units gained or lost, and into money where the funnel permits.
+
+    Signed as observed minus expected, so a loss is negative and a recovery is positive. This
+    used to be the other way round -- a shortfall, positive when things got worse -- and every
+    consumer read it as a delta. A segment that lost 113 clicks was stored as ``+113`` and
+    rendered next to a downward arrow, and ``revenue at risk``, which sums ``min(0, revenue)``
+    to keep a recovery from cancelling a breakage, therefore summed nothing but zeroes and
+    reported no money at risk during an incident. The sign is the whole claim here, so it now
+    matches ``direction`` and needs no reader to know a convention.
 
     The conversion is only as sound as the shortest path from the metric to revenue. Fill rate
     reaches money through two further rates, each measured on the affected segment during the
@@ -200,72 +225,72 @@ def estimate_impact(metric: str, observed: Counters, observed_value: float, expe
     accrues on impressions, not clicks, so any money attached to lost clicks would be a
     downstream advertiser-value argument this system has no data to make.
     """
-    shortfall = expected_value - observed_value
+    delta = observed_value - expected_value
 
     if metric == "fill_rate":
-        lost_fills = shortfall * observed.requests
+        fills = delta * observed.requests
         render = observed.impressions / observed.fills if observed.fills else 0.0
         rev_per_impression = observed.revenue / observed.impressions if observed.impressions else 0.0
         return Impact(
-            units=lost_fills,
+            units=fills,
             unit="fills",
-            revenue=lost_fills * render * rev_per_impression,
+            revenue=fills * render * rev_per_impression,
             direct=False,
             basis=(
-                f"{lost_fills:,.0f} fills short of expectation across {observed.requests:,} requests",
+                _short(fills, "fills", observed.requests, "requests"),
                 f"carried to impressions at the segment's own render rate of {render:.4f}",
                 f"valued at the segment's own revenue per impression of {rev_per_impression:.6f}",
             ),
         )
 
     if metric == "render_rate":
-        lost_impressions = shortfall * observed.fills
+        impressions = delta * observed.fills
         rev_per_impression = observed.revenue / observed.impressions if observed.impressions else 0.0
         return Impact(
-            units=lost_impressions,
+            units=impressions,
             unit="impressions",
-            revenue=lost_impressions * rev_per_impression,
+            revenue=impressions * rev_per_impression,
             direct=False,
             basis=(
-                f"{lost_impressions:,.0f} impressions short across {observed.fills:,} fills",
+                _short(impressions, "impressions", observed.fills, "fills"),
                 f"valued at the segment's own revenue per impression of {rev_per_impression:.6f}",
             ),
         )
 
     if metric == "ctr":
-        lost_clicks = shortfall * observed.impressions
+        clicks = delta * observed.impressions
         return Impact(
-            units=lost_clicks,
+            units=clicks,
             unit="clicks",
             revenue=None,
             direct=False,
             basis=(
-                f"{lost_clicks:,.0f} clicks short across {observed.impressions:,} impressions",
+                _short(clicks, "clicks", observed.impressions, "impressions"),
                 "no revenue figure: revenue accrues on impressions in this dataset, not clicks",
             ),
         )
 
     if metric == "ecpm":
-        lost = shortfall * observed.impressions / 1000.0
+        money = delta * observed.impressions / 1000.0
         return Impact(
-            units=lost,
+            units=money,
             unit="revenue",
-            revenue=lost,
+            revenue=money,
             direct=True,
-            basis=(f"eCPM shortfall of {shortfall:.4f} over {observed.impressions:,} impressions",),
+            basis=(f"eCPM moved {delta:+.4f} over {observed.impressions:,} impressions",),
         )
 
     if metric == "rpr":
-        lost = shortfall * observed.requests
+        money = delta * observed.requests
         return Impact(
-            units=lost,
+            units=money,
             unit="revenue",
-            revenue=lost,
+            revenue=money,
             direct=True,
-            basis=(f"revenue-per-request shortfall of {shortfall:.6f} over {observed.requests:,} requests",),
+            basis=(f"revenue per request moved {delta:+.6f} over {observed.requests:,} requests",),
         )
 
-    return Impact(units=shortfall, unit=metric, revenue=None, direct=False, basis=())
+    return Impact(units=delta, unit=metric, revenue=None, direct=False, basis=())
 
 
 def _check_score(candidate: Candidate, name: str) -> float:
@@ -316,9 +341,27 @@ class Case:
     confidence_json: str = "{}"
     narrative: str = ""
     narrative_source: str = "template"
+    narrative_model: str = ""
+    narrative_verified: bool = False
+    narrative_rejected: list[str] = field(default_factory=list)
+    narrative_prompt_tokens: int = 0
+    narrative_completion_tokens: int = 0
+    narrative_latency_ms: int = 0
     trace_id: str = ""
     recurrence_of: str = ""
+    # Size of the sweep this finding came out of. Held on the case rather than looked up from
+    # the run, because a reader weighing one survivor of four thousand tests against one of
+    # forty needs the denominator next to the claim, not a join away.
+    cells_tested: int = 0
     steps: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def detector(self) -> str:
+        return self.finding.detector
+
+    @property
+    def mode(self) -> str:
+        return self.localization.mode
 
     @property
     def segment(self) -> Segment:
@@ -365,9 +408,18 @@ class Case:
             _json(self.impact.to_dict()),
             self.narrative,
             self.narrative_source,
+            self.narrative_model,
+            1 if self.narrative_verified else 0,
+            list(self.narrative_rejected),
+            int(self.narrative_prompt_tokens),
+            int(self.narrative_completion_tokens),
+            int(self.narrative_latency_ms),
             self.fingerprint,
             self.trace_id,
             self.recurrence_of,
+            self.detector,
+            self.mode,
+            int(self.cells_tested),
         ]
 
     def candidate_rows(self) -> list[list[Any]]:
@@ -414,6 +466,7 @@ class Case:
                 step["result"],
                 step["sql"],
                 int(step["duration_ms"]),
+                int(step.get("offset_ms", 0)),
                 step["span_id"],
             ]
             for step in self.steps
@@ -430,6 +483,7 @@ def build_case(
     trace_id: str = "",
     steps: list[dict[str, Any]] | None = None,
     detected_at: datetime | None = None,
+    cells_tested: int = 0,
 ) -> Case:
     """Assemble a case from the parts each stage produced.
 
@@ -462,6 +516,13 @@ def build_case(
         confidence_json=_json(_confidence_payload(confidence)),
         narrative=str(getattr(narration, "text", "") or ""),
         narrative_source=str(getattr(narration, "source", "template") or "template"),
+        narrative_model=str(getattr(narration, "model", "") or ""),
+        narrative_verified=bool(getattr(narration, "verified", False)),
+        narrative_rejected=[str(f) for f in (getattr(narration, "unsupported", None) or [])],
+        narrative_prompt_tokens=int(getattr(narration, "prompt_tokens", 0) or 0),
+        narrative_completion_tokens=int(getattr(narration, "completion_tokens", 0) or 0),
+        narrative_latency_ms=int(getattr(narration, "latency_ms", 0) or 0),
+        cells_tested=int(cells_tested),
         trace_id=trace_id,
         steps=steps or [],
     )

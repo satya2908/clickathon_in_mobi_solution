@@ -163,6 +163,11 @@ class LLMConfig(BaseModel):
     max_tokens: int = 1200
     timeout_seconds: int = 60
     max_retries: int = 2
+    # Sent only when set, because providers disagree about it: Gemini accepts "low" and rejects
+    # "none" with a 400, and an endpoint that has never heard of the parameter should not be made
+    # to reject every request. Worth having because reasoning models bill invisible thinking
+    # against max_tokens, and a budget spent on thinking returns prose that stops mid-sentence.
+    reasoning_effort: str = ""
 
     @model_validator(mode="after")
     def _check_key(self) -> LLMConfig:
@@ -302,6 +307,36 @@ class Config(BaseModel):
 
 
 DEFAULT_CONFIG_PATH = Path("config/verdict.yaml")
+DEFAULT_ENV_FILE = Path(".env")
+
+
+def read_dotenv(path: Path) -> dict[str, str]:
+    """Parse a ``.env`` file into a plain dict. Missing file is not an error.
+
+    Written out rather than pulling in python-dotenv: the format is a handful of lines and the
+    precedence rules matter more than the parsing, so they belong somewhere visible.
+
+    Deliberately does not strip trailing comments from unquoted values. Implementations disagree
+    on whether ``KEY=a#b`` holds ``a#b`` or ``a``, and a credential silently truncated at a ``#``
+    is a miserable thing to debug. Wrap a value in quotes if it needs to end in whitespace.
+    """
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.removeprefix("export ").strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key] = value
+    return values
 
 
 def load_config(
@@ -314,8 +349,20 @@ def load_config(
     Resolution order: explicit ``path`` argument, then ``$VERDICT_CONFIG``, then
     ``config/verdict.yaml``. An overlay file (``$VERDICT_CONFIG_OVERLAY``) is deep-merged on
     top when present, which is how a per-environment ConfigMap layers onto the shipped base.
+
+    Settings come from ``.env`` first and the real environment second, the environment winning
+    every collision. Reading the file at all is what stops ``.env`` being a Docker-only artefact:
+    Compose loads it automatically, so editing a value there and running the CLI directly used to
+    change nothing, with no error to explain the silence. Letting the environment win keeps that
+    honest in the other direction -- a Kubernetes secret or an explicit ``LLM_ENABLED=false`` on
+    the command line is never shadowed by a file someone left in the working directory.
+
+    Passing ``env`` explicitly skips the file entirely, so tests stay hermetic.
     """
-    src = dict(os.environ) if env is None else env
+    if env is None:
+        src = {**read_dotenv(Path(os.environ.get("VERDICT_ENV_FILE", DEFAULT_ENV_FILE))), **os.environ}
+    else:
+        src = env
     base_path = Path(path or src.get("VERDICT_CONFIG") or DEFAULT_CONFIG_PATH)
     if not base_path.exists():
         raise ConfigError(

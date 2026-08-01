@@ -1,0 +1,9 @@
+node_modules
+.next
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
+
+# Corporate TLS-interception CA, for networks that need it. Never committed: a build must not
+# depend on one company's certificate, and the file is regenerated from `npm config get ca`.
+certs/

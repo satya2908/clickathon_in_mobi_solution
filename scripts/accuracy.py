@@ -141,6 +141,7 @@ def run_controls(cfg, registry, ch, grain: str, threshold: float) -> int:
     print("-" * 108)
 
     tally = {True: [0, 0, 0], False: [0, 0, 0]}  # accused, unattributed, windows
+    leaked = []
     for name, start, hours, testable in CONTROL_WINDOWS:
         window = Window(start=start, end=start + timedelta(hours=hours), grain=grain)
         result = investigate(
@@ -159,6 +160,13 @@ def run_controls(cfg, registry, ch, grain: str, threshold: float) -> int:
         bucket[0] += len(confident)
         bucket[1] += unattributed
         bucket[2] += 1
+        # Only the temporal detector needs a dispersion estimate, and it is the only one the
+        # guard can silence. The structural detector compares a cell against its siblings inside
+        # the same window and holds no opinion about history, so it is *expected* to speak in a
+        # window with one baseline week. Counting its output as a leak said the guard had failed
+        # when the guard had in fact silenced all 15,236 testable cells it was asked about.
+        if not testable:
+            leaked += [c for c in result.cases if c.finding.detector == "temporal"]
         print(f"{name:<10} {start:%Y-%m-%d}   {len(confident):<11} {unattributed:<13} {worst:<45}")
 
     print("-" * 108)
@@ -170,10 +178,16 @@ def run_controls(cfg, registry, ch, grain: str, threshold: float) -> int:
             f"{label:<26} {n} day(s): {acc} false accusation(s) at conf >= {threshold:.2f} "
             f"({acc / n:.2f}/day), {unatt} unattributed ({unatt / n:.2f}/day)"
         )
-    if tally[False][0] or tally[False][1]:
+    if tally[False][2]:
         print(
-            "\nWARNING: windows with under two aligned baseline weeks produced output. The "
-            "dispersion estimate cannot be formed there, so nothing should have been tested."
+            "\nThin windows: output there is structural only -- sibling comparison inside the "
+            "window, which needs no history and is expected to speak."
+        )
+    if leaked:
+        print(
+            f"\nWARNING: {len(leaked)} temporal case(s) in windows with under two aligned "
+            "baseline weeks. The dispersion estimate cannot be formed there, so the temporal "
+            "detector should have been silent: " + ", ".join(sorted({c.finding.metric for c in leaked}))
         )
     print("=" * 108 + "\n")
     return 0

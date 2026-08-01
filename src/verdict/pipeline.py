@@ -41,7 +41,7 @@ from .metrics import MetricRegistry
 from .query import RollupReader, Window
 from .store import Case, CaseStore, build_case, direction_of
 from .structural import detect_structural
-from .trace import NullTracer, Tracer
+from .trace import NullTracer, Step, Tracer
 
 log = logging.getLogger(__name__)
 
@@ -209,6 +209,26 @@ def group_findings(findings: list[Finding]) -> list[list[Finding]]:
     return groups
 
 
+def for_metric(steps: list[Step], metric: str) -> list[Step]:
+    """The part of the run-level prefix that concerns one metric.
+
+    A sweep over ten metrics emits a detection span per metric per lattice combination, and
+    copying all of them onto every case produced four thousand rows for nine cases -- a
+    three-megabyte page, most of it a fill_rate case carrying the CTR scan. The other metrics'
+    spans are not evidence for this verdict; they are what else happened to run at the time.
+
+    Named spans follow ``stage:metric:combo``, so anything with fewer than two segments --
+    ``investigate``, ``detect``, ``correct`` -- is structural and always kept, which also keeps
+    every retained child's parent present in the result.
+    """
+    keep = []
+    for step in steps:
+        parts = step.name.split(":")
+        if len(parts) < 2 or parts[1] == metric:
+            keep.append(step)
+    return keep
+
+
 def detect_all(
     reader: RollupReader,
     registry: MetricRegistry,
@@ -248,6 +268,48 @@ def detect_all(
 
 
 def investigate(
+    cfg: Config,
+    ch: ClickHouse,
+    registry: MetricRegistry,
+    window: Window,
+    *,
+    metrics: list[str] | None = None,
+    tracer: Tracer | None = None,
+    persist: bool = True,
+    narrate: bool = True,
+    max_cases: int = 25,
+) -> InvestigationResult:
+    """Investigate one window under a single root span.
+
+    The root exists so the run is one trace rather than several. Each stage used to open its own
+    top-level span, and a top-level span starts a new trace: one run produced 56 traces across
+    287 spans, with detect, correct, localize, confidence and narrate all unconnected. A case
+    stores one trace id to deep-link a reader into HyperDX, so that link opened whichever
+    fragment the case happened to capture instead of the investigation that produced it.
+
+    Nesting everything here also makes the trace match the mental model the case file describes:
+    one investigation, with the stages inside it in the order they ran.
+    """
+    tracer = tracer or NullTracer()
+    with tracer.span("investigate", kind="pipeline") as span:
+        span.what(f"Investigating {window.label()} at {window.grain} grain")
+        span.why(
+            "One root span per run, so every stage below shares a trace id and the case can "
+            "link a reader to the whole investigation rather than to one stage of it."
+        )
+        result = _investigate(
+            cfg, ch, registry, window,
+            metrics=metrics, tracer=tracer, persist=persist,
+            narrate=narrate, max_cases=max_cases,
+        )
+        span.result(
+            f"{len(result.cases)} case(s) from {result.findings_after_correction} finding(s) "
+            f"that survived correction"
+        )
+        return result
+
+
+def _investigate(
     cfg: Config,
     ch: ClickHouse,
     registry: MetricRegistry,
@@ -310,6 +372,17 @@ def investigate(
     confidence_mod = _optional_confidence()
     narrate_mod = _optional_narrate() if narrate else None
 
+    # Everything traced so far belongs to the run rather than to any one case: the root span, the
+    # lattice sweep, and the correction. Each case copies the part of it that concerns its own
+    # metric, so that reading one case_id back gives the whole investigation rather than its last
+    # three steps. Without this a stored case showed only localize, confidence and narrate -- the
+    # stages that justify the verdict, the sweep that found it and the correction that survived
+    # it, were absent.
+    #
+    # Copied rather than normalised into a run-level table, so one query by case_id returns a
+    # self-contained tree whose parent references all resolve inside it.
+    shared = list(tracer.steps)
+
     for group in group_findings(findings)[:max_cases]:
         entry = group[0]
         direction = direction_of(entry.test.relative_effect)
@@ -343,7 +416,11 @@ def investigate(
             confidence=scored,
             narration=narration,
             trace_id=tracer.trace_id,
-            steps=[{"case_id": "", **s.as_row()} for s in tracer.steps[mark:]],
+            cells_tested=result.cells_tested,
+            steps=[
+                {"case_id": "", **s.as_row()}
+                for s in (*for_metric(shared, entry.metric), *tracer.steps[mark:])
+            ],
         )
         result.cases.append(case)
 

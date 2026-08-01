@@ -1409,6 +1409,12 @@ class Narration:
     verified: bool
     unsupported: list[str] = field(default_factory=list)
     model: str = ""
+    # Carried so the case file can show what the model cost and how long it took, including on
+    # the paths where its draft was thrown away. A discarded draft is the most interesting one:
+    # it is the guardrail firing, and without a record it is a claim rather than a demonstration.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_ms: int = 0
 
 
 def narrate(bundle: EvidenceBundle, cfg: LLMConfig, client: Any = None) -> Narration:
@@ -1446,7 +1452,17 @@ def narrate(bundle: EvidenceBundle, cfg: LLMConfig, client: Any = None) -> Narra
         return Narration(template, "template", False, [], "")
 
     if not isinstance(completion, Completion) or not completion.ok or not completion.text.strip():
-        return Narration(template, "template", False, [], "")
+        # Still record the cost. A call that failed after retries, or one whose draft was cut off
+        # at the token ceiling, consumed budget and time, and a case that silently reads
+        # "template" gives no hint that a model was tried at all.
+        return Narration(
+            template, "template", False, [],
+            getattr(completion, "model", "") if isinstance(completion, Completion) else "",
+            getattr(completion, "prompt_tokens", 0) if isinstance(completion, Completion) else 0,
+            getattr(completion, "completion_tokens", 0)
+            if isinstance(completion, Completion) else 0,
+            getattr(completion, "latency_ms", 0) if isinstance(completion, Completion) else 0,
+        )
 
     result = verify_numbers(completion.text, bundle)
     if not result.ok:
@@ -1455,6 +1471,12 @@ def narrate(bundle: EvidenceBundle, cfg: LLMConfig, client: Any = None) -> Narra
             len(result.unsupported),
             ", ".join(result.unsupported),
         )
-        return Narration(template, "template", False, result.unsupported, completion.model)
+        return Narration(
+            template, "template", False, result.unsupported, completion.model,
+            completion.prompt_tokens, completion.completion_tokens, completion.latency_ms,
+        )
 
-    return Narration(completion.text.strip(), "llm", True, [], completion.model)
+    return Narration(
+        completion.text.strip(), "llm", True, [], completion.model,
+        completion.prompt_tokens, completion.completion_tokens, completion.latency_ms,
+    )

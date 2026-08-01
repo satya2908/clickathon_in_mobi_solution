@@ -13,7 +13,10 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Dependency layer is keyed on pyproject alone, so editing source does not reinstall the world.
-COPY pyproject.toml README.md ./
+# LICENSE too: pyproject declares `license = { file = "LICENSE" }`, and setuptools reads it
+# while generating metadata, so its absence fails the build before a single dependency is
+# fetched. It is tiny and never changes, so it costs this layer nothing.
+COPY pyproject.toml README.md LICENSE ./
 RUN mkdir -p src/verdict && touch src/verdict/__init__.py && pip install .
 
 COPY src/ ./src/

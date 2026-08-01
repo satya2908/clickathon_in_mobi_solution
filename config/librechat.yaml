@@ -11,6 +11,53 @@
 version: 1.3.0
 cache: true
 
+# Gemini over its OpenAI-compatible endpoint, declared as a custom provider rather than through
+# LibreChat's built-in Google or OpenAI entries. The built-in OpenAI provider ignores a base URL
+# and would post Gemini traffic to api.openai.com, which fails with an authentication error that
+# reads as a bad key rather than as a misrouted request -- an expensive hour to debug.
+#
+# Going through the OpenAI wire format also means this file and src/verdict/llm.py agree on one
+# protocol, so LLM_BASE_URL is the only thing that has to change to move to Groq or OpenAI.
+endpoints:
+  custom:
+    - name: 'Gemini'
+      apiKey: '${LLM_API_KEY}'
+      baseURL: '${LLM_BASE_URL}'
+      models:
+        default: ['${LLM_MODEL}']
+        # Pull the account's real model list at boot rather than pinning names here. Free-tier
+        # model availability changes, and a hardcoded name that Google has retired shows up as an
+        # empty dropdown with no explanation.
+        fetch: true
+      titleConvo: true
+      titleModel: '${LLM_MODEL}'
+      modelDisplayLabel: 'Gemini'
+      # Tools are the entire point: without function calling the model cannot reach the MCP
+      # server, and the chat degrades to a plausible-sounding narrator with no access to the data.
+      capabilities: ['tools']
+
+# One spec, made the default, because the bubble opened on "My Agents" -- LibreChat's own
+# default endpoint -- and every message came back as
+# {"error":"Bad Request","message":"agent_id is required in request body"}. The Gemini endpoint
+# above was configured correctly the whole time; nothing was ever selecting it.
+#
+# `addedEndpoints` is deliberately omitted. Leaving it out hides the endpoint menu altogether,
+# so Agents and Assistants cannot be picked by accident. Choosing a provider is not a question
+# a chat bubble should be asking: there is one model here, and it is wired to one database.
+modelSpecs:
+  prioritize: true
+  list:
+    - name: 'verdict'
+      label: 'Verdict.AI'
+      default: true
+      description: 'Reads the same ClickHouse rollups the detectors read.'
+      preset:
+        endpoint: 'Gemini'
+        model: '${LLM_MODEL}'
+        greeting: |
+          Ask about any run, case, or segment. I query the same rollup tables the detectors
+          read, so anything I tell you can be checked against the case file.
+
 interface:
   # The dropdown has to be visible, because the point of the surface is that a reader can see
   # which tool answered them. A chat that silently consults a database is a worse artefact than

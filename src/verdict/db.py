@@ -67,12 +67,27 @@ def as_utc(parameters: dict[str, Any] | None) -> dict[str, Any] | None:
     """
     if not parameters:
         return parameters
-    return {
-        key: value.replace(tzinfo=UTC)
-        if isinstance(value, datetime) and value.tzinfo is None
-        else value
-        for key, value in parameters.items()
-    }
+    return {key: stamp_utc(value) for key, value in parameters.items()}
+
+
+def stamp_utc(value: Any) -> Any:
+    """Read one naive datetime as UTC. Anything else passes through untouched."""
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def rows_as_utc(rows: Sequence[Sequence[Any]]) -> list[list[Any]]:
+    """The same normalisation for values being written rather than matched against.
+
+    Reading was only half the bug. A naive datetime handed to ``insert`` is converted on the
+    way out exactly as a query parameter is, so a case investigated at midnight was *stored*
+    as 18:30 the previous day on a machine at +05:30. That shift is worse than the read-side
+    one it mirrors, because a query returns the wrong rows once while a bad insert is wrong
+    for as long as the row exists -- and it made every stored window land on a half-hour
+    boundary that no hourly bucket can ever match.
+    """
+    return [[stamp_utc(value) for value in row] for row in rows]
 
 
 def render_sql(sql: str, parameters: dict[str, Any] | None) -> str:
@@ -308,11 +323,12 @@ class ClickHouse:
         if not rows:
             return
         statement = f"INSERT INTO {table} ({', '.join(column_names)})"
+        stamped = rows_as_utc(rows)
         with self._span(name, statement):
             self._run(
                 statement,
                 lambda: self.client.insert(
-                    table, rows, column_names=list(column_names), settings=BULK_INSERT_SETTINGS
+                    table, stamped, column_names=list(column_names), settings=BULK_INSERT_SETTINGS
                 ),
                 name=name,
             )

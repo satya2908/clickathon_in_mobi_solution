@@ -1,5 +1,13 @@
 # Verdict local stack.
 #
+#   docker compose up -d --build
+#
+# brings up everything a demo needs: the console on http://localhost:3000, the Verdict.AI chat
+# it embeds on :3080, the MCP server that chat queries through, and the OTLP collector that
+# ships investigation traces to ClickHouse Cloud. Nothing is behind a profile except the
+# self-hosted telemetry backend, because a stack where half the product needs a second command
+# is a stack that gets demoed half-working.
+#
 # Two ways to run the telemetry side, selected by compose profile. Both speak plain OTLP on
 # 4317/4318, so the application is identical either way and never knows which is running.
 #
@@ -92,9 +100,50 @@ services:
     # Long-lived so `docker compose exec verdict verdict <command>` works during a demo.
     entrypoint: ["sleep", "infinity"]
 
-  # ---- Conversational surface, profile "chat" ----
+  # ---- Console, http://localhost:3000 ----
   #
-  #   docker compose --profile chat up -d
+  # Server components query ClickHouse directly. There is no API tier because a second service
+  # would exist only to forward the same query, with the same credentials, to the same database.
+  # The credentials never reach the browser: every read runs during render.
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: verdict-web:${VERDICT_TAG:-local}
+    container_name: verdict-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      # Same six names the engine reads, so one .env configures both and they cannot drift
+      # onto different databases.
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
+
+      # Both are clicked in the browser, so they must be reachable from the host rather than
+      # from inside the compose network -- a service name would resolve here and fail there.
+      NEXT_PUBLIC_CHAT_URL: ${NEXT_PUBLIC_CHAT_URL:-http://localhost:${LIBRECHAT_PORT:-3080}}
+      NEXT_PUBLIC_HYPERDX_URL: ${NEXT_PUBLIC_HYPERDX_URL:-https://hyperdx.clickhouse.cloud}
+
+      # The remediation service that writes the Actions tab. Unlike the two above this one is
+      # called by the server, not the browser, so it needs a name that resolves inside the
+      # container: `localhost` here would be the container itself. `host.docker.internal` is
+      # the host, which is where the service runs. If the service is down the toggle still
+      # works and every case simply reports that advice could not be generated.
+      RECOMMEND_URL: ${RECOMMEND_URL:-http://host.docker.internal:8157}
+    extra_hosts:
+      # Docker Desktop provides this automatically; Linux does not.
+      - "host.docker.internal:host-gateway"
+
+  # ---- Verdict.AI, the conversational surface ----
+  #
+  # Embedded as a bubble in the console at http://localhost:3000 and reachable on its own at
+  # http://localhost:3080.
   #
   # A judge asking "what about EU fill rate that week?" is asking a question no dashboard was
   # built to answer in advance. The honest way to answer it is to let a model write SQL against
@@ -108,7 +157,6 @@ services:
     image: mcp/clickhouse
     container_name: verdict-mcp-clickhouse
     restart: unless-stopped
-    profiles: ["chat"]
     environment:
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
@@ -128,7 +176,6 @@ services:
     image: mongo:7
     container_name: verdict-chat-db
     restart: unless-stopped
-    profiles: ["chat"]
     command: mongod --quiet --logpath /dev/null
     volumes:
       - chat-db-data:/data/db
@@ -137,7 +184,6 @@ services:
     image: ghcr.io/danny-avila/librechat:latest
     container_name: verdict-librechat
     restart: unless-stopped
-    profiles: ["chat"]
     depends_on: [chat-db, mcp-clickhouse]
     ports:
       - "${LIBRECHAT_PORT:-3080}:3080"
@@ -146,7 +192,15 @@ services:
       PORT: 3080
       MONGO_URI: mongodb://chat-db:27017/LibreChat
       # Same key the narration layer uses, so there is one credential to supply rather than two.
-      OPENAI_API_KEY: ${LLM_API_KEY:-}
+      # Read by the custom endpoint in librechat.yaml rather than by LibreChat's built-in OpenAI
+      # provider, which would ignore the base URL and send Gemini traffic to api.openai.com.
+      # Falls back to LibreChat's "user_provided" sentinel rather than an empty string, which
+      # would make it drop the endpoint at boot and present an empty model list with no reason
+      # given. With the sentinel the stack always starts, and a key can be pasted into the
+      # browser instead of the file -- useful when someone else is driving the demo.
+      LLM_API_KEY: ${LLM_API_KEY:-user_provided}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
       # Local-only secrets. Real deployments must override all three; they are fixed here so the
       # stack starts without a setup step, and fixed values in a compose file are exactly why
       # this profile is not something to expose beyond localhost.

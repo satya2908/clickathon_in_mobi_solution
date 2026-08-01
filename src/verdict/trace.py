@@ -41,12 +41,35 @@ class Step:
     result: str = ""
     sql: str = ""
     duration_ms: int = 0
+    # Milliseconds from the start of the run to the start of this step. Duration alone is not
+    # enough to draw a waterfall: it gives every bar a width but no position, and placing them
+    # by summing earlier siblings silently assumes the run had no gaps in it. Measuring the
+    # offset instead means a stage that waited on something shows the wait.
+    offset_ms: int = 0
     span_id: str = ""
     attributes: dict[str, Any] = field(default_factory=dict)
+    # 32 hex characters, distinct from the 16 of span_id. Kept off as_row because case_steps has
+    # no column for it; the trace id belongs to the whole investigation, not to one step, and it
+    # is carried on the case.
+    trace_id: str = ""
+    started: float = 0.0
+    # Set when the span closes. Needed because a step that finished in under a millisecond and a
+    # step that has not finished at all both hold duration_ms == 0, and they must not be treated
+    # alike: substituting elapsed-so-far for a fast step reported children lasting longer than
+    # the parents containing them.
+    finished: bool = False
 
     def as_row(self) -> dict[str, Any]:
         d = asdict(self)
-        d.pop("attributes")
+        for key in ("attributes", "trace_id", "started", "finished"):
+            d.pop(key)
+        # A span still open when the row is taken has no duration yet, and the enclosing one
+        # always is: cases are built inside the run's root span, so the root reached storage at
+        # 0ms and a waterfall drawn from it had a zero-width bar on the very step that sets the
+        # scale. Elapsed-so-far is the honest reading -- the step really has run that long by the
+        # time it is being written about.
+        if not self.finished:
+            d["duration_ms"] = int((time.perf_counter() - self.started) * 1000)
         return d
 
 
@@ -92,6 +115,10 @@ class Tracer:
         self.steps: list[Step] = []
         self._stack: list[str] = []
         self._ordinal = 0
+        # Fixed for the life of the tracer, and deliberately not cleared by reset(): a case
+        # carries the run-level steps that preceded it, so offsets have to share one origin
+        # across every case in the run or the prefix would restart at zero in each of them.
+        self._origin = time.perf_counter()
         self._otel_tracer: Any | None = None
         self._provider: Any | None = None
         if cfg.enabled:
@@ -139,18 +166,22 @@ class Tracer:
         )
         self.steps.append(step)
         self._stack.append(step.step_id)
-        started = time.perf_counter()
+        started = step.started = time.perf_counter()
+        step.offset_ms = max(0, int((started - self._origin) * 1000))
 
         if self._otel_tracer is None:
             try:
                 yield Span(step, None)
             finally:
                 step.duration_ms = int((time.perf_counter() - started) * 1000)
+                step.finished = True
                 self._stack.pop()
             return
 
         with self._otel_tracer.start_as_current_span(name) as otel_span:
-            step.span_id = format(otel_span.get_span_context().span_id, "016x")
+            context = otel_span.get_span_context()
+            step.span_id = format(context.span_id, "016x")
+            step.trace_id = format(context.trace_id, "032x")
             try:
                 yield Span(step, otel_span)
             except Exception as exc:
@@ -159,14 +190,22 @@ class Tracer:
                 raise
             finally:
                 step.duration_ms = int((time.perf_counter() - started) * 1000)
+                step.finished = True
                 self._stack.pop()
 
     @property
     def trace_id(self) -> str:
-        """The trace id of the first recorded span, used to deep-link a case into HyperDX."""
+        """The trace id of the first recorded span, used to deep-link a case into HyperDX.
+
+        This returned ``span_id`` until it was checked against the exported data: 16 hex
+        characters where a trace id is 32, so every stored value matched a ``SpanId`` in
+        ``otel_traces`` and none matched a ``TraceId``. HyperDX searches by trace, so the deep
+        link the field exists for would have found nothing -- and silently, since a trace
+        viewer given an unknown id shows an empty result rather than an error.
+        """
         for step in self.steps:
-            if step.span_id:
-                return step.span_id
+            if step.trace_id:
+                return step.trace_id
         return ""
 
     def steps_for_case(self, case_id: str) -> list[dict[str, Any]]:

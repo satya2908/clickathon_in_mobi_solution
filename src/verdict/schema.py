@@ -374,9 +374,27 @@ def results_ddl(cfg: Config) -> list[Statement]:
   impact_json     String,
   narrative       String,
   narrative_source LowCardinality(String),
+  -- What the model did, kept queryable rather than only logged. The system's central claim is
+  -- that a figure it cannot verify never reaches a reader, and these columns are what turn that
+  -- from an assertion into something a sceptic can check: filter on narrative_verified = 0 and
+  -- narrative_rejected holds the exact literals the model wrote that the evidence did not
+  -- support. A guardrail whose firings are not recorded cannot be audited.
+  narrative_model LowCardinality(String),
+  narrative_verified UInt8,
+  narrative_rejected Array(String),
+  narrative_prompt_tokens UInt32,
+  narrative_completion_tokens UInt32,
+  narrative_latency_ms UInt32,
   fingerprint     String,
   trace_id        String,
-  recurrence_of   String
+  recurrence_of   String,
+  -- How the verdict was reached, as opposed to what it says. A reader deciding how much
+  -- weight to give a case needs to know whether it came from a comparison against history
+  -- or against siblings, whether localization could run the removal test at all, and how
+  -- wide a sweep the finding survived.
+  detector        LowCardinality(String),
+  mode            LowCardinality(String),
+  cells_tested    UInt32
 )
 ENGINE = ReplacingMergeTree(detected_at)
 PARTITION BY toYYYYMM(detected_at)
@@ -418,10 +436,39 @@ ORDER BY (case_id, status, candidate)""",
   result      String,
   sql         String,
   duration_ms UInt32,
+  offset_ms   UInt32,
   span_id     String
 )
 ENGINE = MergeTree
 ORDER BY (case_id, ordinal)""",
+        ),
+        Statement(
+            "case_recommendations",
+            # What to do about a case, as opposed to what happened -- the only table here whose
+            # contents are model-written rather than computed, which is why the provenance sits
+            # beside the advice: which models produced it, how many candidates the first pass
+            # drafted, and how many survived independent review. A reader can see the filter
+            # working, and a summary that kept two of six says more about the advice than any
+            # confidence label the model could assign itself.
+            #
+            # Replacing, keyed on the case, because regenerating advice supersedes it rather
+            # than adding to it. Generating costs roughly two minutes of model time per case,
+            # so this is also the cache that stops a UI toggle from paying that twice.
+            """CREATE TABLE IF NOT EXISTS case_recommendations (
+  case_id          String,
+  generated_at     DateTime,
+  status           LowCardinality(String),
+  summary          String,
+  drafted          UInt16,
+  kept             UInt16,
+  recommendations  String,
+  generation_model LowCardinality(String),
+  validation_model LowCardinality(String),
+  job_id           String,
+  error            String
+)
+ENGINE = ReplacingMergeTree(generated_at)
+ORDER BY case_id""",
         ),
         Statement(
             "coverage_ledger",
@@ -488,6 +535,27 @@ def migration_statements() -> list[Statement]:
         Statement(
             "migrate_coverage_resolvable_effect",
             "ALTER TABLE coverage_ledger ADD COLUMN IF NOT EXISTS resolvable_effect Float64 DEFAULT -1",
+        ),
+        # AFTER duration_ms so the column order matches the DDL: inserts are positional, and a
+        # column appended at the end here but declared mid-table there would put offsets into
+        # span_id on any instance that took the migration path.
+        Statement(
+            "migrate_steps_offset_ms",
+            "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS offset_ms UInt32 DEFAULT 0 AFTER duration_ms",
+        ),
+        *(
+            Statement(f"migrate_cases_{name.split()[0]}", f"ALTER TABLE cases ADD COLUMN IF NOT EXISTS {name}")
+            for name in (
+                "narrative_model LowCardinality(String) DEFAULT ''",
+                "narrative_verified UInt8 DEFAULT 0",
+                "narrative_rejected Array(String) DEFAULT []",
+                "narrative_prompt_tokens UInt32 DEFAULT 0",
+                "narrative_completion_tokens UInt32 DEFAULT 0",
+                "narrative_latency_ms UInt32 DEFAULT 0",
+                "detector LowCardinality(String) DEFAULT ''",
+                "mode LowCardinality(String) DEFAULT ''",
+                "cells_tested UInt32 DEFAULT 0",
+            )
         ),
     ]
 
