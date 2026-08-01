@@ -47,11 +47,24 @@ class Step:
     # no column for it; the trace id belongs to the whole investigation, not to one step, and it
     # is carried on the case.
     trace_id: str = ""
+    started: float = 0.0
+    # Set when the span closes. Needed because a step that finished in under a millisecond and a
+    # step that has not finished at all both hold duration_ms == 0, and they must not be treated
+    # alike: substituting elapsed-so-far for a fast step reported children lasting longer than
+    # the parents containing them.
+    finished: bool = False
 
     def as_row(self) -> dict[str, Any]:
         d = asdict(self)
-        d.pop("attributes")
-        d.pop("trace_id")
+        for key in ("attributes", "trace_id", "started", "finished"):
+            d.pop(key)
+        # A span still open when the row is taken has no duration yet, and the enclosing one
+        # always is: cases are built inside the run's root span, so the root reached storage at
+        # 0ms and a waterfall drawn from it had a zero-width bar on the very step that sets the
+        # scale. Elapsed-so-far is the honest reading -- the step really has run that long by the
+        # time it is being written about.
+        if not self.finished:
+            d["duration_ms"] = int((time.perf_counter() - self.started) * 1000)
         return d
 
 
@@ -144,13 +157,14 @@ class Tracer:
         )
         self.steps.append(step)
         self._stack.append(step.step_id)
-        started = time.perf_counter()
+        started = step.started = time.perf_counter()
 
         if self._otel_tracer is None:
             try:
                 yield Span(step, None)
             finally:
                 step.duration_ms = int((time.perf_counter() - started) * 1000)
+                step.finished = True
                 self._stack.pop()
             return
 
@@ -166,6 +180,7 @@ class Tracer:
                 raise
             finally:
                 step.duration_ms = int((time.perf_counter() - started) * 1000)
+                step.finished = True
                 self._stack.pop()
 
     @property

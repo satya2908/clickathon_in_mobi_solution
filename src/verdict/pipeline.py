@@ -352,6 +352,17 @@ def _investigate(
     confidence_mod = _optional_confidence()
     narrate_mod = _optional_narrate() if narrate else None
 
+    # Everything traced so far belongs to the run rather than to any one case: the root span, the
+    # lattice sweep, and the correction. Each case copies it as a prefix so that reading one
+    # case_id back gives the whole investigation rather than its last three steps. Without this a
+    # stored case showed only localize, confidence and narrate -- the stages that justify the
+    # verdict, the sweep that found it and the correction that survived it, were absent.
+    #
+    # Copied rather than normalised into a run-level table. The prefix is a few dozen small rows
+    # and cases are capped, so the duplication is trivial next to what it buys: one query by
+    # case_id returns a self-contained tree whose parent references all resolve inside it.
+    shared = list(tracer.steps)
+
     for group in group_findings(findings)[:max_cases]:
         entry = group[0]
         direction = direction_of(entry.test.relative_effect)
@@ -385,7 +396,7 @@ def _investigate(
             confidence=scored,
             narration=narration,
             trace_id=tracer.trace_id,
-            steps=[{"case_id": "", **s.as_row()} for s in tracer.steps[mark:]],
+            steps=[{"case_id": "", **s.as_row()} for s in (*shared, *tracer.steps[mark:])],
         )
         result.cases.append(case)
 

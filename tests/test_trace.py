@@ -12,6 +12,8 @@ mistake here cannot fake.
 
 from __future__ import annotations
 
+import time
+
 from verdict.config import TracingConfig
 from verdict.trace import Tracer
 
@@ -89,3 +91,50 @@ class TestStepRowsMatchTheStoredColumns:
         with t.span("detect"):
             pass
         assert t.steps[0].as_row()["span_id"] == t.steps[0].span_id
+
+
+class TestAnOpenSpanReportsElapsedRatherThanZero:
+    """Cases are built inside the run's root span, so the root is always still open when its row
+    is taken. Reporting 0 put a zero-width bar on the one step that sets a waterfall's scale."""
+
+    def test_a_closed_span_reports_its_real_duration(self):
+        t = tracer()
+        with t.span("detect"):
+            time.sleep(0.02)
+        assert t.steps[0].as_row()["duration_ms"] >= 15
+
+    def test_an_open_span_reports_time_so_far(self):
+        t = tracer()
+        with t.span("investigate"):
+            time.sleep(0.02)
+            row = t.steps[0].as_row()
+        assert row["duration_ms"] >= 15
+
+    def test_the_recorded_duration_wins_once_the_span_closes(self):
+        """Elapsed-so-far is a stand-in, not a replacement: it must not drift afterwards."""
+        t = tracer()
+        with t.span("detect"):
+            pass
+        t.steps[0].duration_ms = 4242
+        assert t.steps[0].as_row()["duration_ms"] == 4242
+
+    def test_a_span_that_finished_instantly_still_reports_zero(self):
+        """A closed sub-millisecond step and an open one both hold 0, and conflating them made
+        fast children report longer than the parents they ran inside."""
+        t = tracer()
+        with t.span("investigate"):
+            with t.span("fast"):
+                pass
+            time.sleep(0.03)
+            rows = [s.as_row() for s in t.steps]
+        assert rows[1]["duration_ms"] == 0
+
+    def test_no_child_outlasts_its_parent(self):
+        t = tracer()
+        with t.span("investigate"):
+            with t.span("detect"):
+                with t.span("temporal:fill_rate"):
+                    pass
+            time.sleep(0.03)
+            rows = {s.name: s.as_row()["duration_ms"] for s in t.steps}
+        assert rows["temporal:fill_rate"] <= rows["detect"] <= rows["investigate"]
