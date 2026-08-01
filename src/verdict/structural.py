@@ -116,7 +116,8 @@ def median_polish(
     converged = False
     iterations = 0
 
-    for iterations in range(1, max_iterations + 1):
+    for sweep in range(1, max_iterations + 1):
+        iterations = sweep
         moved = 0.0
 
         for r in rows:

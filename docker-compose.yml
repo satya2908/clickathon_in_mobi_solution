@@ -1,25 +1,48 @@
 # Verdict local stack.
 #
-# Analytics data lives in ClickHouse Cloud (set CLICKHOUSE_* in .env). The ClickHouse bundled
-# inside the ClickStack image below is a separate thing entirely: it stores observability data
-# -- the investigation traces -- and never sees an ad event. Keeping them apart is deliberate,
-# because a telemetry backend that shares a cluster with the system it observes stops being
-# useful exactly when that cluster is in trouble.
+# Two ways to run the telemetry side, selected by compose profile. Both speak plain OTLP on
+# 4317/4318, so the application is identical either way and never knows which is running.
+#
+#   managed (default)  docker compose up -d otel-collector
+#       A collector forwarding to ClickHouse Cloud, with the HyperDX UI hosted at
+#       hyperdx.clickhouse.cloud. Investigation traces land in the same ClickHouse service as
+#       the ad data, which means a reviewer can join a span against the rows that produced it
+#       in one query. That is the whole argument for this mode.
+#
+#   selfhosted         docker compose --profile selfhosted up -d clickstack
+#       The all-in-one image, carrying its own ClickHouse for traces. Slower to start and
+#       heavier, but it keeps telemetry on separate infrastructure from the system being
+#       observed -- which is the right production instinct, because a telemetry backend that
+#       shares a cluster with its subject goes dark exactly when that cluster is in trouble.
+#       For this project the analytics warehouse is not the thing being diagnosed, so the
+#       shared-fate risk is theoretical and the queryability is real.
 
 name: verdict
 
 services:
-  # ClickStack: OpenTelemetry collector, HyperDX UI, and a ClickHouse to hold traces.
-  # Every investigation step arrives here as a span, which is how a reviewer walks what the
-  # analyst did rather than taking the conclusion on faith.
+  otel-collector:
+    image: clickhouse/clickstack-otel-collector:latest
+    container_name: verdict-otel-collector
+    restart: unless-stopped
+    profiles: ["managed", ""]
+    environment:
+      # The collector creates its own otel_* tables on first run; no schema setup needed.
+      CLICKHOUSE_ENDPOINT: https://${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}:${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+    ports:
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+
   clickstack:
     image: docker.hyperdx.io/hyperdx/hyperdx-all-in-one:2
     container_name: verdict-clickstack
     restart: unless-stopped
+    profiles: ["selfhosted"]
     ports:
-      - "${HYPERDX_UI_PORT:-8080}:8080"     # HyperDX UI
-      - "${OTLP_HTTP_PORT:-4318}:4318"      # OTLP/HTTP, what the app exports to
-      - "${OTLP_GRPC_PORT:-4317}:4317"      # OTLP/gRPC
+      - "${HYPERDX_UI_PORT:-8080}:8080"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+      - "${OTLP_GRPC_PORT:-4317}:4317"
     environment:
       FRONTEND_URL: "http://localhost:${HYPERDX_UI_PORT:-8080}"
     volumes:
@@ -38,11 +61,7 @@ services:
       dockerfile: Dockerfile
     image: verdict:${VERDICT_TAG:-local}
     container_name: verdict
-    depends_on:
-      clickstack:
-        condition: service_healthy
     environment:
-      # Analytics warehouse. Required; there is no default host on purpose.
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
@@ -50,12 +69,14 @@ services:
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
       CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
 
-      # Container-to-container, so the service name rather than localhost.
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://clickstack:4318
+      # Resolves to whichever telemetry service is up; both publish the same ports on the
+      # compose network under their own name, so this is set to the managed one by default and
+      # overridden in .env when running the selfhosted profile.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_COMPOSE_ENDPOINT:-http://otel-collector:4318}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-verdict}
       TRACING_ENABLED: ${TRACING_ENABLED:-true}
 
-      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_ENABLED: ${LLM_ENABLED:-false}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}

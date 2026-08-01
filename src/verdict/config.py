@@ -27,8 +27,12 @@ _PLACEHOLDER = re.compile(
     re.VERBOSE,
 )
 
-_TRUE = {"1", "true", "yes", "on"}
-_FALSE = {"0", "false", "no", "off"}
+# Deliberately excludes "0" and "1". In configuration those are overwhelmingly numbers --
+# max_threads, replica counts, retry budgets -- and treating them as booleans turns
+# ${MAX_THREADS:-0} into False, which ClickHouse then tries to parse as a setting value and
+# rejects with an error that points nowhere near the cause.
+_TRUE = {"true", "yes", "on"}
+_FALSE = {"false", "no", "off"}
 
 
 class ConfigError(RuntimeError):
