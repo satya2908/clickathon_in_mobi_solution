@@ -509,7 +509,16 @@ def _assemble(readings: dict[str, _Reading], cfg: ConfidenceConfig) -> Confidenc
 
     scored = sum(1 for c in components if c.scored)
     unknown_names = [c.name for c in components if not c.scored]
-    publishable = value >= cfg.publish_threshold and scored >= _MIN_PUBLISHABLE_COMPONENTS
+    # Significance is not one vote among five. The other four all ask "is this the right
+    # culprit", and every one of them can be answered convincingly about a movement that was
+    # never shown to be a movement at all -- a segment can explain a parent's wobble, be at the
+    # right level, and beat every rival, while the whole thing is noise. Significance is the
+    # only component that asks whether there is anything to explain, so a verdict without it is
+    # not a weaker verdict, it is an answer to a question nobody established.
+    tested = any(c.name == "significance" and c.scored for c in components)
+    publishable = (
+        value >= cfg.publish_threshold and scored >= _MIN_PUBLISHABLE_COMPONENTS and tested
+    )
     return Confidence(
         value=value,
         components=components,
@@ -533,12 +542,29 @@ def score(localization: Localization, finding: Finding, cfg: ConfidenceConfig) -
     if accused is None:
         return _assemble({name: _Reading(None, _NO_ACCUSED) for name in _ORDER}, cfg)
 
+    # Both components below read the detector's test, and a test describes exactly one cell. The
+    # finding a case is entered on is whichever cell had the smallest p-value in the group, which
+    # is frequently *not* the segment localization goes on to name. Scoring them anyway is the
+    # worst failure this module can produce: an accusation certified by evidence gathered about
+    # somebody else. It reads as the strongest possible case -- five components, no caveat -- and
+    # the number that convinced you was measured on a different segment.
+    #
+    # Withheld rather than substituted. The absence of a test for the accused is a real hole in
+    # the argument, and the coverage rule already prices holes.
+    own = finding.segment == accused.segment
+    borrowed = _Reading(
+        None,
+        f"No test was run on {accused.segment.label()} itself. The detector's evidence here "
+        f"describes {finding.segment.label()}, a different cell, so it cannot speak to this "
+        "accusation.",
+    )
+
     return _assemble(
         {
-            "significance": _significance(finding),
+            "significance": _significance(finding) if own else borrowed,
             "sufficiency": _sufficiency(localization, accused),
             "minimality": _minimality(accused),
-            "stability": _stability(accused, finding),
+            "stability": _stability(accused, finding) if own else borrowed,
             "separation": _separation(localization, accused),
         },
         cfg,

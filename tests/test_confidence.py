@@ -712,3 +712,65 @@ class TestExplain:
         makes the whole file harder to scan."""
         text = score(case(sufficiency=UNKNOWN, minimality=UNKNOWN), finding(), CFG).explain()
         assert max(len(line) for line in text.splitlines()) <= 100
+
+
+class TestEvidenceMustDescribeTheAccused:
+    """A test describes exactly one cell, and it may only speak for that cell.
+
+    The finding a case enters on is whichever cell had the smallest p-value in its group, which
+    is routinely a two-dimensional cell *inside* the segment localization eventually names. An
+    adversarial review found the consequence on live data: a case accusing `category=finance`
+    was certified by a structural test on `EU x interstitial` at p = 0, and published five
+    scored components with an empty caveat. It is the worst shape of error this module can
+    produce, because it looks like the strongest possible case.
+    """
+
+    def other_cell(self, **kw):
+        """A finding about a different segment than the one the case will accuse."""
+        f = finding(**kw)
+        return Finding(
+            metric=f.metric,
+            segment=Segment.of(country="Z"),
+            window=f.window,
+            detector=f.detector,
+            test=f.test,
+            observed_counters=f.observed_counters,
+            baseline_counters=f.baseline_counters,
+            phi=f.phi,
+            weeks_kept=f.weeks_kept,
+            weeks_seen=f.weeks_seen,
+            survives_correction=f.survives_correction,
+        )
+
+    def test_a_borrowed_p_value_does_not_score_significance(self):
+        got = score(case(), self.other_cell(p_value=1e-300), CFG)
+        significance = next(c for c in got.components if c.name == "significance")
+        assert significance.state == "unknown"
+
+    def test_a_borrowed_finding_does_not_score_stability_either(self):
+        """Weeks kept and weeks seen belong to the tested cell, not to the accused one."""
+        got = score(case(), self.other_cell(), CFG)
+        stability = next(c for c in got.components if c.name == "stability")
+        assert stability.state == "unknown"
+
+    def test_overwhelming_borrowed_evidence_scores_below_its_own_evidence(self):
+        """The whole point: a smaller p-value from elsewhere must not raise the number."""
+        borrowed = score(case(), self.other_cell(p_value=1e-300), CFG)
+        own = score(case(), finding(p_value=1e-300), CFG)
+        assert borrowed.value < own.value
+
+    def test_the_caveat_names_the_cell_the_evidence_actually_describes(self):
+        got = score(case(), self.other_cell(), CFG)
+        assert "country=Z" in got.explain()
+
+    def test_two_holes_leave_too_little_to_publish_on(self):
+        """Significance and stability are the two the detector supplies, so borrowing loses
+        both at once and only the three localization components remain."""
+        got = score(case(), self.other_cell(p_value=1e-300), CFG)
+        assert got.components_scored == 3
+        assert not got.publishable
+
+    def test_evidence_about_the_accused_is_still_scored_normally(self):
+        got = score(case(), finding(), CFG)
+        assert got.components_scored == 5
+        assert got.publishable

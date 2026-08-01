@@ -144,7 +144,11 @@ def _finding_for_accused(
         if matches:
             matches.sort(key=lambda f: (f.detector != "temporal", f.test.p_value))
             return matches[0]
-    return None
+    # Nothing in the sweep tested this exact cell, which is common: localization reasons over
+    # the whole lattice while the detector only reports what tripped. The localizer re-tests the
+    # accused cell against its own history for exactly this case, and that result is evidence
+    # about this claim in a way that a neighbouring cell's p-value is not.
+    return localization.accused_finding
 
 
 def _survivor_rank(case: Case) -> tuple[int, float, float]:

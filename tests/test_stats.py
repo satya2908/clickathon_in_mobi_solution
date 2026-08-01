@@ -574,3 +574,38 @@ class TestRobustCentre:
     def test_median_of_empty_raises(self):
         with pytest.raises(ValueError):
             median([])
+
+
+class TestDeclinedTestsSaySoRatherThanReportingCalm:
+    """Every test returns p = 1 with a zero effect when it cannot run.
+
+    Read without care that is indistinguishable from "this cell held steady", and a caller
+    acting on it will clear a segment nobody ever measured. `testable` is what separates the
+    two, and it has to hold for every path that declines, not just the one that prompted it.
+    """
+
+    def test_a_proportion_with_no_baseline_exposure_is_untestable(self):
+        assert not two_proportion_test(50.0, 100.0, 0.0, 0.0).testable
+
+    def test_a_count_with_a_zero_expectation_is_untestable(self):
+        assert not count_test(500.0, 0.0).testable
+
+    def test_a_ratio_with_too_little_history_is_untestable(self):
+        assert not log_ratio_test(2.5, [3.0, 3.1]).testable
+
+    def test_a_ratio_with_no_observation_is_untestable(self):
+        assert not log_ratio_test(0.0, [3.0, 3.1, 3.05, 2.98]).testable
+
+    def test_declining_is_not_the_same_as_finding_nothing(self):
+        """The trap: both report p = 1 and no movement, so p alone cannot tell them apart."""
+        declined = count_test(500.0, 0.0)
+        genuine = count_test(1000.0, 1000.0)
+        assert declined.p_value == genuine.p_value == 1.0
+        assert declined.relative_effect == genuine.relative_effect == 0.0
+        assert not declined.testable
+        assert genuine.testable
+
+    def test_real_results_are_testable(self):
+        assert two_proportion_test(700.0, 1000.0, 7800.0, 10_000.0).testable
+        assert count_test(1200.0, 1000.0).testable
+        assert log_ratio_test(2.0, [3.0, 3.1, 3.05, 2.98]).testable

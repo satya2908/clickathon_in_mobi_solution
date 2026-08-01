@@ -15,6 +15,7 @@ import pytest
 from verdict.config import DetectionConfig, LocalizationConfig
 from verdict.detect import Finding
 from verdict.localize import (
+    Candidate,
     HistoryCache,
     Localizer,
     exonerate,
@@ -26,6 +27,7 @@ from verdict.localize import (
 )
 from verdict.metrics import MetricRegistry
 from verdict.query import Counters, Segment, Window, subtract
+from verdict.schema import TOTAL_COMBO
 from verdict.stats import TestResult
 
 METRICS_PATH = Path(__file__).resolve().parents[1] / "config" / "metrics.yaml"
@@ -536,3 +538,84 @@ class TestEndToEnd:
         result = localizer.localize(self._finding())
         assert result.mode == "structural_only"
         assert result.accused is None or result.accused.sufficiency == 0.0
+
+
+class TestTheCaseQuotesTheCellItAccuses:
+    """A verdict has to carry evidence about its own claim.
+
+    The detector reports whichever cell trips first; localization then reasons over the whole
+    lattice and often names a different one. Quoting the entry cell's p-value produces a case
+    that accuses one segment while reporting another's test -- on the real corpus, a finance
+    eCPM verdict certified by a structural anomaly in EU interstitials. The localizer re-tests
+    the cell it settled on so the case can speak for itself.
+    """
+
+    def _localizer(self, cells):
+        return Localizer(
+            reader=FakeReader(cells),
+            registry=REGISTRY,
+            localization=LocalizationConfig(),
+            detection=DetectionConfig(baseline_weeks=4),
+        )
+
+    def _entry_finding(self):
+        """Deliberately attributed to a cell that is not the culprit, as the detector's would be."""
+        return Finding(
+            metric="fill_rate",
+            segment=Segment.of(device_model="Galaxy S23"),
+            window=WINDOW,
+            detector="structural",
+            test=TestResult(-9.0, 1e-19, 0.70, 0.785, -0.085, -0.108, "two_proportion"),
+            observed_counters=Counters(),
+            baseline_counters=Counters(),
+            phi=1.0,
+        )
+
+    def test_the_confirmatory_test_describes_the_accused_cell(self):
+        localizer = self._localizer(build_world())
+        localizer.cfg.holdout_enabled = False
+
+        result = localizer.localize(self._entry_finding())
+
+        assert result.accused is not None
+        assert result.accused_finding is not None
+        assert result.accused_finding.segment == result.accused.segment
+        assert result.accused_finding.segment != self._entry_finding().segment
+
+    def test_it_is_marked_as_selected_after_the_fact(self):
+        """It must not be pooled back into the detector's corrected family."""
+        localizer = self._localizer(build_world())
+        localizer.cfg.holdout_enabled = False
+
+        result = localizer.localize(self._entry_finding())
+
+        assert result.accused_finding is not None
+        assert result.accused_finding.detector == "confirmatory"
+        assert result.accused_finding.survives_correction is False
+        assert result.accused_finding.notes.get("selected_post_hoc") is True
+
+    def test_it_actually_measured_something(self):
+        localizer = self._localizer(build_world())
+        localizer.cfg.holdout_enabled = False
+
+        result = localizer.localize(self._entry_finding())
+
+        assert result.accused_finding is not None
+        assert result.accused_finding.test.testable
+
+    def test_a_cell_with_no_rows_yields_no_finding_rather_than_an_empty_one(self):
+        """The guard that stops a declined test being passed off as evidence of calm."""
+        cells = build_world()
+        localizer = self._localizer(cells)
+        history = HistoryCache(FakeReader(cells), WINDOW, 4)
+        history.adopt_mask(cells[TOTAL_COMBO][Segment.total()][1:], FILL_RATE, trim=False)
+
+        absent = Candidate(
+            segment=Segment.of(os_version="Android 99"),
+            observed=counters(1_000, 0.5),
+            expected=counters(1_000, BASE_RATE),
+            observed_value=0.5,
+            expected_value=BASE_RATE,
+        )
+
+        assert localizer._confirm(FILL_RATE, absent, history, WINDOW) is None

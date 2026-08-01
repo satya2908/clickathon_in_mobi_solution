@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .config import DetectionConfig, LocalizationConfig
-from .detect import Finding, _pool_history, _test_segment
+from .detect import Finding, _pool_history, _test_segment, estimate_dispersion
 from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window, subtract
 from .schema import LATTICE_DEPTH, TOTAL_COMBO
@@ -202,6 +202,12 @@ class Localization:
     candidates: list[Candidate] = field(default_factory=list)
     mode: str = "explain_away"
     note: str = ""
+    # A test run on the accused cell itself, once localization has chosen it. The detector's
+    # own findings are keyed to whichever cell tripped first, which is often not the cell that
+    # ends up accused, and a case that quotes someone else's p-value is not evidence about its
+    # own claim. Populated at accusation time so it reads the same history snapshot as every
+    # other number in the case.
+    accused_finding: Finding | None = None
 
     @property
     def cleared(self) -> list[Candidate]:
@@ -696,8 +702,10 @@ class Localizer:
         )
         accused = self._accuse(viable, mode, metric, window)
 
+        confirmatory = None
         if accused is not None:
             self._build_ledger(metric, accused, candidates, history)
+            confirmatory = self._confirm(metric, accused, history, window)
 
         if self.tracer is not None:
             self._trace(metric, finding, parent_dev, candidates, accused, mode)
@@ -713,6 +721,68 @@ class Localizer:
             candidates=candidates,
             mode=mode,
             note=note,
+            accused_finding=confirmatory,
+        )
+
+    def _confirm(
+        self, metric: Metric, accused: Candidate, history: HistoryCache, window: Window
+    ) -> Finding | None:
+        """Test the accused cell against its own history, now that we know which cell it is.
+
+        The detector sweeps a fixed lattice and reports whichever cells trip; localization then
+        reasons over the whole lattice and frequently names a cell that was not itself the entry
+        point. Incident C on this corpus accused ``category=finance`` on evidence drawn from
+        ``ad_format=interstitial AND region=EU`` -- the right answer, quoting a stranger's
+        p-value. Withholding the borrowed number is honest but throws away a real finding; the
+        cell being accused is right there in the cache, so the answerable question is simply
+        asked directly.
+
+        Marked ``confirmatory`` rather than ``temporal`` because it is not the same claim. The
+        cell was chosen by looking at the data, so this p-value carries a selection effect that
+        the detector's multiple-testing correction does not cover, and it must not be pooled
+        back into that family. What it does establish is the narrower thing a reader needs: that
+        the cell named in the verdict moved by more than its own history would explain.
+        """
+        cells = history.combo(accused.segment.combo)
+        weeks = cells.get(accused.segment)
+        if weeks is None or len(weeks) < 2:
+            return None
+
+        phi = estimate_dispersion(cells, metric, self.detection)
+        if phi is None:
+            # No dispersion estimate means no honest test. Returning None leaves the confidence
+            # score to record significance as unmeasured, which is the true state of affairs.
+            return None
+
+        pooled = _pool_history(metric, weeks[1:], trim=self.detection.trim_extremes)
+        if not pooled.weeks_kept:
+            return None
+
+        result = _test_segment(metric, weeks[0], pooled, weeks[1:], phi)
+        if not result.testable:
+            # The test declined -- too few usable weeks, or no baseline exposure. Its p = 1 and
+            # zero effect mean "not measured", and passing that on would have the case state
+            # that the cell it is accusing never moved.
+            return None
+
+        return Finding(
+            metric=metric.name,
+            segment=accused.segment,
+            window=window,
+            detector="confirmatory",
+            test=result,
+            observed_counters=weeks[0],
+            baseline_counters=history.expected(weeks),
+            phi=phi,
+            weeks_kept=pooled.weeks_kept,
+            weeks_seen=len(weeks) - 1,
+            # Not part of the corrected family: this cell was selected by the localizer after
+            # seeing the data, so a q-value computed with the detector's sweep would understate
+            # the selection. The localization gates, not this p-value, are what argue the cell
+            # was picked for cause.
+            survives_correction=False,
+            effect_threshold=metric.effect_threshold(self.detection.min_relative_effect),
+            notes={"selected_post_hoc": True},
         )
 
     def _build_candidates(

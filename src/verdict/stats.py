@@ -347,6 +347,22 @@ class TestResult:
             return "fall"
         return "flat"
 
+    @property
+    def testable(self) -> bool:
+        """Whether a comparison was actually formed, as opposed to declined.
+
+        Every test in this module returns ``p = 1`` and a zero effect when it cannot run -- no
+        baseline exposure, too few usable weeks, an expectation of zero. Read naively that is
+        indistinguishable from a confident finding of "this cell did not move", and asserting
+        that about a cell nobody managed to measure is a worse error than staying quiet, because
+        it will clear a real culprit.
+
+        The shared signature of every such path is a NaN expectation: there was no value to
+        compare against. Deriving the flag from that rather than from a list of model names
+        means a test added later cannot forget to declare itself untestable.
+        """
+        return not math.isnan(self.expected)
+
 
 def two_proportion_test(
     k_obs: float, n_obs: float, k_base: float, n_base: float, *, phi: float = 1.0
@@ -391,7 +407,10 @@ def count_test(observed: float, expected: float, *, phi: float = 1.0) -> TestRes
     understates the noise by a wide margin at scale.
     """
     if expected <= 0:
-        return TestResult(0.0, 1.0, observed, expected, 0.0, 0.0, "quasi_poisson")
+        # NaN rather than the zero that was passed in, so the result reports itself as
+        # untestable. A zero expectation carries no scale, so there is no size against which
+        # the observation could be called normal or surprising.
+        return TestResult(0.0, 1.0, observed, float("nan"), 0.0, 0.0, "quasi_poisson")
     variance = phi * expected
     z = (observed - expected) / math.sqrt(variance)
     return TestResult(
