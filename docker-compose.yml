@@ -1,0 +1,167 @@
+# Verdict local stack.
+#
+# Two ways to run the telemetry side, selected by compose profile. Both speak plain OTLP on
+# 4317/4318, so the application is identical either way and never knows which is running.
+#
+#   managed (default)  docker compose up -d otel-collector
+#       A collector forwarding to ClickHouse Cloud, with the HyperDX UI hosted at
+#       hyperdx.clickhouse.cloud. Investigation traces land in the same ClickHouse service as
+#       the ad data, which means a reviewer can join a span against the rows that produced it
+#       in one query. That is the whole argument for this mode.
+#
+#   selfhosted         docker compose --profile selfhosted up -d clickstack
+#       The all-in-one image, carrying its own ClickHouse for traces. Slower to start and
+#       heavier, but it keeps telemetry on separate infrastructure from the system being
+#       observed -- which is the right production instinct, because a telemetry backend that
+#       shares a cluster with its subject goes dark exactly when that cluster is in trouble.
+#       For this project the analytics warehouse is not the thing being diagnosed, so the
+#       shared-fate risk is theoretical and the queryability is real.
+
+name: verdict
+
+services:
+  otel-collector:
+    image: clickhouse/clickstack-otel-collector:latest
+    container_name: verdict-otel-collector
+    restart: unless-stopped
+    profiles: ["managed", ""]
+    environment:
+      # The collector creates its own otel_* tables on first run; no schema setup needed.
+      CLICKHOUSE_ENDPOINT: https://${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}:${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+    ports:
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+
+  clickstack:
+    image: docker.hyperdx.io/hyperdx/hyperdx-all-in-one:2
+    container_name: verdict-clickstack
+    restart: unless-stopped
+    profiles: ["selfhosted"]
+    ports:
+      - "${HYPERDX_UI_PORT:-8080}:8080"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+    environment:
+      FRONTEND_URL: "http://localhost:${HYPERDX_UI_PORT:-8080}"
+    volumes:
+      - clickstack-data:/data/db
+      - clickstack-logs:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  verdict:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: verdict:${VERDICT_TAG:-local}
+    container_name: verdict
+    environment:
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
+
+      # Resolves to whichever telemetry service is up; both publish the same ports on the
+      # compose network under their own name, so this is set to the managed one by default and
+      # overridden in .env when running the selfhosted profile.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_COMPOSE_ENDPOINT:-http://otel-collector:4318}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-verdict}
+      TRACING_ENABLED: ${TRACING_ENABLED:-true}
+
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+
+      VERDICT_DATA_DIR: /data
+      VERDICT_OUTPUT_DIR: /out
+    volumes:
+      # Config as a bind mount mirrors how a ConfigMap behaves in Kubernetes: same path, same
+      # file, replaced from outside without touching the image.
+      - ./config:/etc/verdict:ro
+      - ${DATA_DIR:-./data}:/data:ro
+      - ./out:/out
+    # Long-lived so `docker compose exec verdict verdict <command>` works during a demo.
+    entrypoint: ["sleep", "infinity"]
+
+  # ---- Conversational surface, profile "chat" ----
+  #
+  #   docker compose --profile chat up -d
+  #
+  # A judge asking "what about EU fill rate that week?" is asking a question no dashboard was
+  # built to answer in advance. The honest way to answer it is to let a model write SQL against
+  # the same rollup the detectors read, which is what the MCP server below exposes.
+  #
+  # The boundary matters: the model gets a tool that runs queries, not a summary of the data and
+  # not the authority to decide anything. Verdicts still come from the deterministic pipeline.
+  # This is the follow-up-question surface, not a second opinion.
+
+  mcp-clickhouse:
+    image: mcp/clickhouse
+    container_name: verdict-mcp-clickhouse
+    restart: unless-stopped
+    profiles: ["chat"]
+    environment:
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
+      # Must agree with the port. Pairing false with 8443 is the usual setup mistake and it
+      # surfaces as an opaque HTTP client error rather than a scheme complaint.
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
+      CLICKHOUSE_MCP_SERVER_TRANSPORT: sse
+      CLICKHOUSE_MCP_BIND_HOST: 0.0.0.0
+      CLICKHOUSE_MCP_AUTH_DISABLED: "true"
+    ports:
+      - "${MCP_PORT:-8001}:8000"
+
+  chat-db:
+    image: mongo:7
+    container_name: verdict-chat-db
+    restart: unless-stopped
+    profiles: ["chat"]
+    command: mongod --quiet --logpath /dev/null
+    volumes:
+      - chat-db-data:/data/db
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: verdict-librechat
+    restart: unless-stopped
+    profiles: ["chat"]
+    depends_on: [chat-db, mcp-clickhouse]
+    ports:
+      - "${LIBRECHAT_PORT:-3080}:3080"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3080
+      MONGO_URI: mongodb://chat-db:27017/LibreChat
+      # Same key the narration layer uses, so there is one credential to supply rather than two.
+      OPENAI_API_KEY: ${LLM_API_KEY:-}
+      # Local-only secrets. Real deployments must override all three; they are fixed here so the
+      # stack starts without a setup step, and fixed values in a compose file are exactly why
+      # this profile is not something to expose beyond localhost.
+      CREDS_KEY: ${LIBRECHAT_CREDS_KEY:-f34be427ebb29de8d88c107a71546019685ed8b241d8f2ed00c3df97ad2566f0}
+      CREDS_IV: ${LIBRECHAT_CREDS_IV:-e2341419ec3dd3d19b13a1a87fafcbfb}
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET:-16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef}
+      JWT_REFRESH_SECRET: ${LIBRECHAT_JWT_REFRESH:-eaa5191f2914e30b9387fd84e254e4ba6fc51b4654d3a7bd9694d9fbc4bfea1b}
+      ALLOW_REGISTRATION: "true"
+      ALLOW_EMAIL_LOGIN: "true"
+    volumes:
+      - ./config/librechat.yaml:/app/librechat.yaml:ro
+      - librechat-images:/app/client/public/images
+
+volumes:
+  clickstack-data:
+  clickstack-logs:
+  chat-db-data:
+  librechat-images:

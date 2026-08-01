@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  A host page with nothing in it but the bubble, used to check the integration on its own.
+
+  If the bubble works here and not in the real dashboard, the fault is in the dashboard. If it
+  fails here, the fault is in the stack, and the two are worth being able to tell apart.
+
+      python3 -m http.server 8090 --directory deploy/chat
+      open http://localhost:8090/demo.html
+
+  Serve it rather than opening the file directly; see the cookie note in bubble.js.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verdict chat bubble — integration check</title>
+<style>
+  body{margin:0;font:15px/1.6 system-ui,sans-serif;background:#0d1117;color:#e6edf3}
+  main{max-width:640px;margin:0 auto;padding:56px 24px}
+  code{background:#161b22;border:1px solid #30363d;border-radius:4px;padding:1px 5px;font-size:13px}
+  li{margin:6px 0}
+</style>
+</head>
+<body>
+<main>
+  <h1>Chat bubble</h1>
+  <p>The button sits bottom right. Opening it mounts LibreChat in an iframe, which in turn
+     reaches ClickHouse through the MCP server.</p>
+  <h2>What working looks like</h2>
+  <ul>
+    <li>The panel opens and shows LibreChat rather than a blank box.</li>
+    <li>Signing in once survives a reload &mdash; if it does not, the page is being served from
+        <code>file://</code> and the session cookie is being dropped.</li>
+    <li>A conversation offers the <code>verdict-clickhouse</code> tools.</li>
+    <li>Asking for the fill rate of <code>os_version=Android 15</code> between 23 and 26 June 2026
+        returns <code>0.43331</code>. Any other number means the model answered from memory.</li>
+  </ul>
+  <p>The last one is the only check that proves anything. The rest can pass while the model is
+     inventing.</p>
+</main>
+<script src="bubble.js" data-chat-url="http://localhost:3080"></script>
+</body>
+</html>

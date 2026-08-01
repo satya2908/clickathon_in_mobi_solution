@@ -1,0 +1,86 @@
+# Scheduled investigation.
+#
+# The workload is a batch job, not a server: it wakes, scans the window that just closed,
+# publishes any cases it can defend, and exits. Modelling it as a Deployment would mean
+# inventing an internal scheduler and a liveness story for a process that is idle by design.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: verdict-investigate
+  labels:
+    app.kubernetes.io/name: verdict
+    app.kubernetes.io/component: analyst
+spec:
+  schedule: "5 * * * *"
+  timeZone: "UTC"
+  # A run that overruns its slot must not have a second copy started alongside it; two
+  # analysts scanning one window publish the same case twice.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: verdict
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: verdict
+              image: verdict
+              imagePullPolicy: IfNotPresent
+              # No --start: the window then anchors on the newest bucket in the rollup and walks
+              # back two hours, which is what a two-hourly sweep wants. Anchoring on wall-clock
+              # "now" instead would report calm whenever ingestion had stalled, because an empty
+              # window looks exactly like a quiet one.
+              args: ["investigate", "--hours", "2"]
+              envFrom:
+                - configMapRef:
+                    name: verdict-env
+                    optional: true
+                - secretRef:
+                    name: verdict-secrets
+              env:
+                - name: VERDICT_CONFIG
+                  value: /etc/verdict/verdict.yaml
+                - name: VERDICT_METRICS
+                  value: /etc/verdict/metrics.yaml
+                - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                  value: http://clickstack.observability.svc.cluster.local:4318
+                - name: VERDICT_OUTPUT_DIR
+                  value: /out
+              volumeMounts:
+                # Mounted read-only over the image's baked-in defaults, at the same path the
+                # application already expects. Nothing about the image changes.
+                - name: config
+                  mountPath: /etc/verdict
+                  readOnly: true
+                - name: out
+                  mountPath: /out
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  memory: 2Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+          volumes:
+            - name: config
+              configMap:
+                name: verdict-config
+            - name: out
+              emptyDir: {}

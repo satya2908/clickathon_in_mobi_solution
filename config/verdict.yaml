@@ -1,0 +1,103 @@
+# Verdict base configuration.
+#
+# Every value is either a literal or a ${VAR} placeholder resolved from the environment at
+# load time. No secret ever appears in this file, so it is safe to commit, safe to mount as a
+# Kubernetes ConfigMap verbatim, and safe to bake into an image. Credentials arrive separately
+# through the environment (a Secret, in Kubernetes).
+#
+#   ${VAR}            required, startup fails with a named error if unset
+#   ${VAR:-default}   falls back when unset or empty
+#   ${VAR-default}    falls back only when unset
+
+clickhouse:
+  host: ${CLICKHOUSE_HOST}
+  port: ${CLICKHOUSE_PORT:-8443}
+  username: ${CLICKHOUSE_USER:-default}
+  password: ${CLICKHOUSE_PASSWORD:-}
+  database: ${CLICKHOUSE_DATABASE:-verdict}
+  secure: ${CLICKHOUSE_SECURE:-true}
+  verify: ${CLICKHOUSE_VERIFY:-true}
+  connect_timeout: ${CLICKHOUSE_CONNECT_TIMEOUT:-30}
+  send_receive_timeout: ${CLICKHOUSE_QUERY_TIMEOUT:-300}
+  settings:
+    # Scans are wide and shallow; let ClickHouse use the whole service for a single query
+    # rather than serialising the lattice sweep behind a conservative default.
+    max_execution_time: ${CLICKHOUSE_MAX_EXECUTION_TIME:-300}
+    max_threads: ${CLICKHOUSE_MAX_THREADS:-0}
+
+llm:
+  # Narration only. Disable this and every number in every case file is byte-identical;
+  # only the prose degrades to a template. That property is the point.
+  enabled: ${LLM_ENABLED:-true}
+  base_url: ${LLM_BASE_URL:-https://api.openai.com/v1}
+  api_key: ${LLM_API_KEY:-}
+  model: ${LLM_MODEL:-gpt-4o-mini}
+  temperature: ${LLM_TEMPERATURE:-0.0}
+  max_tokens: ${LLM_MAX_TOKENS:-1200}
+  timeout_seconds: ${LLM_TIMEOUT:-60}
+  max_retries: ${LLM_MAX_RETRIES:-2}
+
+tracing:
+  # Each investigation step emits a span carrying what was run, why, and what came back.
+  # The trace is the audit log and the drill-down UI at the same time.
+  enabled: ${TRACING_ENABLED:-true}
+  endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318}
+  service_name: ${OTEL_SERVICE_NAME:-verdict}
+  api_key: ${HYPERDX_API_KEY:-}
+  console_fallback: ${TRACING_CONSOLE:-false}
+
+detection:
+  baseline_weeks: ${DETECT_BASELINE_WEEKS:-4}
+  min_baseline_samples: 2
+  trim_extremes: true
+  # Overdispersion multiplier on binomial variance, estimated at runtime from the baseline
+  # window and clamped. Ad-tech rate metrics are never truly binomial across segments.
+  dispersion_floor: 1.0
+  dispersion_ceiling: 50.0
+  p_value_threshold: ${DETECT_P_THRESHOLD:-0.01}
+  min_relative_effect: ${DETECT_MIN_EFFECT:-0.05}
+  # Symmetric by default: an unexplained rise is as much a finding as an unexplained fall.
+  detect_rises: true
+  grains: ["5m", "1h", "1d"]
+  target_power: 0.80
+  structural_min_levels: 3
+  structural_z_threshold: 5.0
+  structural_min_window_days: 1
+  # A trailing baseline chases slow drift and absorbs it. A fixed anchor does not.
+  anchor_drift_enabled: true
+  anchor_lag_days: 28
+
+localization:
+  max_candidates: 40
+  max_depth: 2
+  sufficiency_threshold: 0.60
+  minimality_threshold: 0.30
+  maximality_threshold: 0.50
+  exoneration_residual_tolerance: 0.005
+  holdout_enabled: true
+
+confidence:
+  weights:
+    significance: 0.25
+    sufficiency: 0.30
+    minimality: 0.15
+    stability: 0.15
+    separation: 0.15
+  publish_threshold: 0.50
+
+retention:
+  # Day counts are the production policy. `enforce` decides whether they become real TTL
+  # clauses. It is off by default: a historical dataset is older than a 7-day raw TTL, so
+  # enabling this on an analysis corpus tells ClickHouse to delete all of it on the first
+  # background merge -- minutes after a load that reported success.
+  enforce: ${RETENTION_ENFORCE:-false}
+  raw_events_days: ${RETENTION_RAW_DAYS:-7}
+  rollup_5m_days: ${RETENTION_5M_DAYS:-30}
+  rollup_1h_days: ${RETENTION_1H_DAYS:-180}
+  rollup_1d_days: ${RETENTION_1D_DAYS:-730}
+  cases_days: 730
+
+run:
+  data_dir: ${VERDICT_DATA_DIR:-./data}
+  output_dir: ${VERDICT_OUTPUT_DIR:-./out}
+  replay_speed: ${VERDICT_REPLAY_SPEED:-0}

@@ -1,0 +1,32 @@
+# Root kustomization.
+#
+# It lives here rather than under deploy/k8s because kustomize refuses, by design, to read
+# files above its own directory. Rooting the build at the repository root is what lets the
+# ConfigMap be generated from config/*.yaml directly -- the same files the application reads
+# locally and the image carries as defaults. The alternative, a hand-copied ConfigMap, is how
+# a cluster ends up running thresholds that no longer match the ones in the repository.
+#
+#   kubectl kustomize .            # render
+#   kubectl apply -k .             # apply
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: verdict
+
+configMapGenerator:
+  - name: verdict-config
+    files:
+      - config/verdict.yaml
+      - config/metrics.yaml
+
+# Hash suffix on the name, so changing a threshold rolls the pods instead of leaving them on
+# values nobody remembers setting.
+generatorOptions:
+  disableNameSuffixHash: false
+
+resources:
+  - deploy/k8s
+
+images:
+  - name: verdict
+    newTag: local

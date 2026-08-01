@@ -1,0 +1,10 @@
+# Manifest set. Built from the repository root (`kubectl kustomize .`), which is where the
+# ConfigMap is generated from config/*.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - secret.example.yaml
+  - job-load.yaml
+  - cronjob-investigate.yaml
