@@ -98,6 +98,35 @@ export interface Step {
   depth?: number;
 }
 
+/** One surviving remediation, after independent review. Mirrors the service's schema. */
+export interface Recommendation {
+  title: string;
+  action: string;
+  rationale: string;
+  expected_benefit: string;
+  validation_step: string;
+  risk: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  confidence: 'high' | 'medium' | 'low';
+  evidence: string[];
+}
+
+/** The advice for one case, with the provenance that makes it auditable: which models wrote
+ *  it, how many candidates the first pass drafted, and how many survived the second. */
+export interface RecommendationSet {
+  case_id: string;
+  generated_at: string;
+  status: 'completed' | 'failed';
+  summary: string;
+  /** First-pass count. `drafted - recommendations.length` is what review removed. */
+  drafted: number;
+  recommendations: Recommendation[];
+  generation_model: string;
+  validation_model: string;
+  job_id: string;
+  error: string;
+}
+
 /** One row of `cases`, plus the joined evidence a reviewer needs on the page. */
 export interface Case {
   case_id: string;

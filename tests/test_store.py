@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from verdict.config import DetectionConfig
 from verdict.detect import Finding
 from verdict.localize import Candidate, Localization
@@ -27,6 +29,7 @@ from verdict.store import (
     CASE_COLUMNS,
     STEP_COLUMNS,
     build_case,
+    estimate_impact,
 )
 
 REGISTRY = MetricRegistry.load("config/metrics.yaml")
@@ -160,3 +163,45 @@ class TestWhatTheModelDidIsRecorded:
         row = dict(zip(CASE_COLUMNS, built.case_row(), strict=True))
         assert row["narrative_rejected"] == ["45%"]
         assert all(isinstance(f, str) for f in row["narrative_rejected"])
+
+
+class TestImpactIsSignedLikeTheMovement:
+    """A loss is negative and a recovery is positive.
+
+    This was inverted: impact was stored as a shortfall, positive when the metric fell. Every
+    reader treated it as a delta, so a segment that lost 113 clicks was rendered as ``+113``
+    beside a downward arrow, and ``revenue at risk`` -- which sums ``min(0, revenue)`` so a
+    recovery cannot cancel a breakage -- summed only zeroes and reported no money at risk.
+    """
+
+    def test_a_fall_is_negative(self):
+        # 60 clicks observed against 173 expected: 113 clicks lost.
+        impact = estimate_impact("ctr", Counters(impressions=1000), 0.060, 0.173)
+        assert impact.units < 0
+        assert impact.units == pytest.approx(-113.0)
+        assert "short of expectation" in impact.basis[0]
+
+    def test_a_rise_is_positive(self):
+        impact = estimate_impact("ctr", Counters(impressions=1000), 0.173, 0.060)
+        assert impact.units > 0
+        assert "above expectation" in impact.basis[0]
+
+    def test_money_lost_is_negative_so_revenue_at_risk_can_sum_it(self):
+        # Fill rate ten points below expectation, on a segment that renders and earns.
+        impact = estimate_impact(
+            "fill_rate",
+            Counters(requests=10_000, fills=6_000, impressions=6_000, revenue=60.0),
+            0.60,
+            0.70,
+        )
+        assert impact.units == pytest.approx(-1000.0)
+        assert impact.revenue is not None
+        assert impact.revenue < 0
+        # min(0, revenue) is how the console keeps a recovery from cancelling a breakage; a
+        # positive figure here would silently contribute nothing.
+        assert min(0.0, impact.revenue) == impact.revenue
+
+    def test_the_sign_agrees_with_the_direction_the_case_reports(self):
+        for observed, expected, direction in ((0.05, 0.10, "fall"), (0.10, 0.05, "rise")):
+            impact = estimate_impact("ctr", Counters(impressions=500), observed, expected)
+            assert (impact.units < 0) == (direction == "fall")

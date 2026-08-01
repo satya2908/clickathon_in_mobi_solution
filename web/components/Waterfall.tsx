@@ -32,8 +32,9 @@ export function Waterfall({
   const end = Math.max(...nodes.map(n => n.offset_ms + n.duration_ms));
   const total = Math.max(1, end - start);
 
-  // Six ticks reads as a scale; more reads as graph paper and competes with the bars.
-  const ticks = Array.from({ length: 6 }, (_, i) => (total * i) / 5);
+  // Four ticks. Six were specified for a wider column and overlapped into a smear once the
+  // track was sized to fit beside the 460px trace panel.
+  const ticks = Array.from({ length: 4 }, (_, i) => (total * i) / 3);
 
   return (
     <div className="wf">

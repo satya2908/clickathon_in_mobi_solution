@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CloseIcon, LinkIcon } from './icons';
 import { TraceTree } from './TraceTree';
+import { Narrative } from './Narrative';
+import { Recommendations } from './Recommendations';
 import { Waterfall } from './Waterfall';
 import { Segment } from './Segment';
 import { flatten, PUBLISH_THRESHOLD } from '@/lib/data';
 import { traceUrl } from '@/lib/links';
 import { ARROW, clearedOf, impact, KIND_BADGE, KIND_LABEL, metricValue, money, ms, pct } from '@/lib/format';
-import type { Candidate, Case, Step } from '@/lib/types';
+import type { Candidate, Case, RecommendationSet, Step } from '@/lib/types';
 
 const STATUS_BADGE: Record<Candidate['status'], string> = {
   accused: 'badge a',
@@ -129,10 +131,24 @@ function NoTrace() {
   );
 }
 
-export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
+export function CasePanel({
+  c,
+  onClose,
+  recommendations,
+  recsEnabled,
+  recsBusy,
+  onGenerate,
+}: {
+  c: Case;
+  onClose: () => void;
+  recommendations: RecommendationSet | null;
+  recsEnabled: boolean;
+  recsBusy: boolean;
+  onGenerate: (force: boolean) => void;
+}) {
   const root = c.trace;
   const nodes = useMemo(() => (root ? flatten(root) : []), [root]);
-  const [tab, setTab] = useState<'trace' | 'evidence' | 'narrative'>('trace');
+  const [tab, setTab] = useState<'trace' | 'evidence' | 'narrative' | 'actions'>('trace');
   // Opens on the localizer rather than the root: the root's detail is a restatement
   // of the header, so landing there wastes the first look at the panel. Keyed on step_id
   // rather than span_id, which is empty whenever tracing is switched off.
@@ -150,6 +166,16 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
       document.body.style.overflow = overflow;
     };
   }, [onClose]);
+
+  // Actions appears only when the toggle is on, so the panel keeps its shape for anyone who
+  // never turns model-written advice on at all.
+  const tabs = (recsEnabled
+    ? (['trace', 'evidence', 'narrative', 'actions'] as const)
+    : (['trace', 'evidence', 'narrative'] as const)) as readonly typeof tab[];
+
+  useEffect(() => {
+    if (!recsEnabled && tab === 'actions') setTab('trace');
+  }, [recsEnabled, tab]);
 
   const node = nodes.find(n => n.step_id === sel) ?? nodes[0] ?? null;
   const accused = c.candidates.find(x => x.status === 'accused');
@@ -207,9 +233,19 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
           </div>
 
           <div className="stabs">
-            {(['trace', 'evidence', 'narrative'] as const).map(t => (
-              <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
-                {t === 'trace' ? `Trace ${nodes.length}` : t === 'evidence' ? `Evidence ${c.candidates.length}` : 'Narrative'}
+            {tabs.map(t => (
+              <button
+                key={t}
+                className={`${tab === t ? 'on' : ''}${t === 'actions' ? ' accent' : ''}`}
+                onClick={() => setTab(t)}
+              >
+                {t === 'trace'
+                  ? `Trace ${nodes.length}`
+                  : t === 'evidence'
+                    ? `Evidence ${c.candidates.length}`
+                    : t === 'narrative'
+                      ? 'Narrative'
+                      : `Actions${recommendations?.status === 'completed' ? ` ${recommendations.recommendations.length}` : ''}`}
               </button>
             ))}
           </div>
@@ -475,7 +511,7 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
                 )}
               </div>
 
-              <p className="narbody">{c.narrative}</p>
+              <Narrative text={c.narrative} />
 
               {c.unsupported.length > 0 && (
                 <div className="guard">
@@ -525,6 +561,51 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
                     </tr>
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'actions' && (
+          <div className="sbody one">
+            <div className="dcol">
+              <div className="colhd">
+                What to do about it
+                <span className="sp dim2" style={{ letterSpacing: 0, textTransform: 'none' }}>
+                  proposed, not verified
+                </span>
+              </div>
+              <div className="scroll" style={{ padding: '14px 18px 24px' }}>
+                {recommendations ? (
+                  <Recommendations
+                    set={recommendations}
+                    busy={recsBusy}
+                    onRegenerate={() => onGenerate(true)}
+                  />
+                ) : recsBusy ? (
+                  <div className="recs">
+                    <div className="recwait">
+                      <span className="spin" />
+                      <div>
+                        <b>Generating, then reviewing</b>
+                        <span>
+                          One pass drafts remediations from the case; a second, with no sight of
+                          the first pass&apos;s reasoning, deletes what the evidence cannot carry.
+                          Two model turns, usually under two minutes.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="recs">
+                    <p className="recsum dim">
+                      No advice has been generated for this case yet.
+                    </p>
+                    <button className="btn sm" onClick={() => onGenerate(false)}>
+                      Generate
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -334,7 +334,25 @@ a.kpi:hover { border-color: var(--line2); }
 .compbar { display: inline-block; width: 72px; height: 4px; border-radius: 2px; background: var(--panel3); overflow: hidden; vertical-align: middle; }
 .compbar i { display: block; height: 100%; background: var(--acc); }
 .compbar i.off { background: var(--line2); }
-.narbody { font-size: 13px; line-height: 1.75; color: var(--tx); max-width: 720px; }
+/* 66ch is the readable measure for continuous prose. The old 720px let a line run past 110
+   characters, which is where the eye starts losing its place returning to the left margin --
+   and this text is dense enough already without making it hard to track. */
+.narbody { font-size: 13px; line-height: 1.75; color: var(--tx); max-width: 66ch; }
+.narbody p { margin: 0 0 0.95em; }
+.narbody p:last-child { margin-bottom: 0; }
+
+/* The verdict itself, ahead of the evidence that supports it. */
+.narbody p.lead { font-size: 13.5px; color: var(--tx); font-weight: 500; }
+.narbody p:not(.lead) { color: var(--tx2); }
+
+/* Figures set apart from the prose, so a reader can scan the numbers without reading the
+   sentences. Presentation only -- nothing here reformats a value, because every one of them
+   was checked against the evidence bundle in the form it is printed. */
+.fig {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.94em; color: var(--tx);
+  background: var(--panel2); border-radius: 3px; padding: 0 3px;
+}
 .guard {
   display: flex; align-items: baseline; gap: 8px; padding: 7px 11px; border-radius: 7px;
   font: 11px var(--mono); background: var(--warnbg); border: 1px solid var(--warnbd); color: var(--warntx);
@@ -490,9 +508,14 @@ html { scrollbar-color: var(--scroll) transparent; }
 
 .vtoggle { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
 .vtoggle button {
-  padding: 2px 8px; background: transparent; border: 0; cursor: pointer;
+  /* width/height reset because `.colhd button` sizes every button in that header as a 17px
+     square icon. A text toggle inheriting it was clipped to "Tr" and "Ti". */
+  width: auto; height: auto; display: inline-block; place-items: initial;
+  padding: 2px 9px; background: transparent; border: 0; border-radius: 0; cursor: pointer;
   color: var(--tx3); font: 500 10.5px/1.6 inherit; letter-spacing: .02em; text-transform: none;
+  white-space: nowrap;
 }
+.vtoggle button:hover, .vtoggle button.on { border-color: transparent; }
 .vtoggle button + button { border-left: 1px solid var(--line); }
 .vtoggle button.on { background: var(--panel2); color: var(--tx); }
 .vtoggle button:hover:not(.on) { color: var(--tx2); }
@@ -500,7 +523,7 @@ html { scrollbar-color: var(--scroll) transparent; }
 .wf { padding: 4px 0 8px; }
 
 .wf-axis {
-  position: relative; height: 16px; margin: 0 62px 4px 190px;
+  position: relative; height: 16px; margin: 0 52px 4px 168px;
   border-bottom: 1px solid var(--line);
 }
 .wf-tick {
@@ -513,7 +536,7 @@ html { scrollbar-color: var(--scroll) transparent; }
 .wf-rows { display: flex; flex-direction: column; }
 
 .wf-row {
-  display: grid; grid-template-columns: 190px 1fr 62px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 168px) 1fr 52px; align-items: center;
   gap: 0; padding: 1px 0; background: transparent; border: 0; cursor: pointer;
   text-align: left; width: 100%; border-radius: 3px;
 }
@@ -535,3 +558,84 @@ html { scrollbar-color: var(--scroll) transparent; }
   padding-left: 8px; text-align: right;
   color: var(--tx3); font: 400 10px/1.7 var(--mono, ui-monospace, monospace);
 }
+
+/* ---------------------------------------------------------------- AI recommendations
+
+   Marked apart from the rest of the console throughout. Trace, evidence and narrative are
+   derived from measurement; this is a model proposing actions nobody has tested, and the
+   styling should never let the two be confused at a glance. */
+
+.aitog { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.aitog input { position: absolute; opacity: 0; width: 0; height: 0; }
+.aitog .track {
+  position: relative; width: 30px; height: 17px; border-radius: 9px; flex: 0 0 auto;
+  background: var(--panel2); border: 1px solid var(--line2); transition: background .12s, border-color .12s;
+}
+.aitog .knob {
+  position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--tx3); transition: transform .12s, background .12s;
+}
+.aitog input:checked + .track { background: var(--accbg); border-color: var(--accbd); }
+.aitog input:checked + .track .knob { transform: translateX(13px); background: var(--acc2); }
+.aitog input:focus-visible + .track { outline: 2px solid var(--acc); outline-offset: 2px; }
+.aitog .lbl { font-size: 11.5px; color: var(--tx2); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.aitog input:checked ~ .lbl { color: var(--tx); }
+.aitog .lbl .n {
+  font-size: 10px; color: var(--acc2); background: var(--accbg);
+  border: 1px solid var(--accbd); border-radius: 8px; padding: 0 5px;
+}
+
+/* The tab itself carries the accent, so the one model-authored surface is findable. */
+.stabs button.accent.on { color: var(--acc2); box-shadow: inset 0 -2px 0 var(--acc); }
+.stabs button.accent:not(.on) { color: var(--tx3); }
+
+.sbody.one { display: flex; }
+.sbody.one .dcol { flex: 1; min-width: 0; }
+
+.recs { max-width: 780px; }
+.recbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.recprov { font-size: 11.5px; color: var(--tx2); }
+.recprov b { color: var(--tx); font-weight: 600; }
+.recsum { font-size: 12.5px; line-height: 1.7; color: var(--tx2); margin: 0 0 16px; max-width: 66ch; }
+
+.reclist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.rec {
+  border: 1px solid var(--line); border-left: 2px solid var(--accbd); border-radius: 6px;
+  background: var(--panel); padding: 11px 13px;
+}
+.rech { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
+.recn {
+  width: 17px; height: 17px; border-radius: 4px; flex: 0 0 auto; display: grid; place-items: center;
+  background: var(--accbg); color: var(--acc2); border: 1px solid var(--accbd);
+  font: 600 10px/1 var(--mono, ui-monospace, monospace);
+}
+.rect { font-size: 12.5px; font-weight: 600; color: var(--tx); flex: 1; min-width: 0; }
+
+.recrow { display: grid; grid-template-columns: 74px 1fr; gap: 10px; padding: 2px 0; align-items: start; }
+.recrow .k {
+  font: 500 10px/1.7 inherit; color: var(--tx3); text-transform: uppercase; letter-spacing: .07em;
+}
+.recrow .v { font-size: 12px; line-height: 1.65; color: var(--tx); min-width: 0; }
+.recrow .v.dim { color: var(--tx2); }
+.recrow .v.warn { color: var(--warn); }
+.recev {
+  display: inline-block; margin: 0 4px 3px 0; padding: 1px 6px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel2);
+  font: 400 10.5px/1.5 var(--mono, ui-monospace, monospace); color: var(--tx2);
+}
+
+.recfoot {
+  margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--line);
+  font-size: 11px; line-height: 1.65; color: var(--tx3); max-width: 66ch;
+}
+
+.recwait { display: flex; gap: 12px; align-items: flex-start; padding: 14px 0; }
+.recwait b { display: block; font-size: 12.5px; color: var(--tx); margin-bottom: 4px; }
+.recwait span { font-size: 11.5px; line-height: 1.65; color: var(--tx2); max-width: 60ch; display: block; }
+.spin {
+  width: 13px; height: 13px; flex: 0 0 auto; margin-top: 2px; border-radius: 50%;
+  border: 2px solid var(--line2); border-top-color: var(--acc);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }

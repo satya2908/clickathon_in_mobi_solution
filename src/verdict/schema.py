@@ -443,6 +443,34 @@ ENGINE = MergeTree
 ORDER BY (case_id, ordinal)""",
         ),
         Statement(
+            "case_recommendations",
+            # What to do about a case, as opposed to what happened -- the only table here whose
+            # contents are model-written rather than computed, which is why the provenance sits
+            # beside the advice: which models produced it, how many candidates the first pass
+            # drafted, and how many survived independent review. A reader can see the filter
+            # working, and a summary that kept two of six says more about the advice than any
+            # confidence label the model could assign itself.
+            #
+            # Replacing, keyed on the case, because regenerating advice supersedes it rather
+            # than adding to it. Generating costs roughly two minutes of model time per case,
+            # so this is also the cache that stops a UI toggle from paying that twice.
+            """CREATE TABLE IF NOT EXISTS case_recommendations (
+  case_id          String,
+  generated_at     DateTime,
+  status           LowCardinality(String),
+  summary          String,
+  drafted          UInt16,
+  kept             UInt16,
+  recommendations  String,
+  generation_model LowCardinality(String),
+  validation_model LowCardinality(String),
+  job_id           String,
+  error            String
+)
+ENGINE = ReplacingMergeTree(generated_at)
+ORDER BY case_id""",
+        ),
+        Statement(
             "coverage_ledger",
             """CREATE TABLE IF NOT EXISTS coverage_ledger (
   run_id       String,

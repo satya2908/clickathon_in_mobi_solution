@@ -36,6 +36,28 @@ endpoints:
       # server, and the chat degrades to a plausible-sounding narrator with no access to the data.
       capabilities: ['tools']
 
+# One spec, made the default, because the bubble opened on "My Agents" -- LibreChat's own
+# default endpoint -- and every message came back as
+# {"error":"Bad Request","message":"agent_id is required in request body"}. The Gemini endpoint
+# above was configured correctly the whole time; nothing was ever selecting it.
+#
+# `addedEndpoints` is deliberately omitted. Leaving it out hides the endpoint menu altogether,
+# so Agents and Assistants cannot be picked by accident. Choosing a provider is not a question
+# a chat bubble should be asking: there is one model here, and it is wired to one database.
+modelSpecs:
+  prioritize: true
+  list:
+    - name: 'verdict'
+      label: 'Verdict.AI'
+      default: true
+      description: 'Reads the same ClickHouse rollups the detectors read.'
+      preset:
+        endpoint: 'Gemini'
+        model: '${LLM_MODEL}'
+        greeting: |
+          Ask about any run, case, or segment. I query the same rollup tables the detectors
+          read, so anything I tell you can be checked against the case file.
+
 interface:
   # The dropdown has to be visible, because the point of the surface is that a reader can see
   # which tool answered them. A chat that silently consults a database is a worse artefact than

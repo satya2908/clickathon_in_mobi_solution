@@ -9,7 +9,7 @@ import { TopBar } from './TopBar';
 import { healthOf, KINDS, kpiOf, PUBLISH_THRESHOLD } from '@/lib/data';
 import { KIND_FILL, KIND_LABEL, money, priority } from '@/lib/format';
 import type { Series } from '@/lib/queries';
-import type { Case, Run, VerdictKind } from '@/lib/types';
+import type { Case, RecommendationSet, Run, VerdictKind } from '@/lib/types';
 
 /** Unpriced cases sort last within their bucket rather than as zero. A case nobody could
  *  convert to revenue is of unknown size, and sorting it among the genuinely small ones
@@ -74,6 +74,12 @@ const PRI_HINT: Record<number, string> = {
 
 const PRI_FILL = ['var(--err)', 'var(--warn)', 'var(--tx2)', 'var(--line2)'];
 
+const AI_HINT =
+  'Off by default. When on, each case gains an Actions tab: one model drafts remediations from ' +
+  'the case evidence, then a second reviews the draft independently and deletes anything the ' +
+  'evidence does not support. Proposals, not findings — nothing here is verified against the ' +
+  'numbers the way the narrative is.';
+
 const KIND_HINT: Record<VerdictKind, string> = {
   localized: 'A segment was named and removing it returned the parent to its expected band.',
   unlocalized: 'The movement is real but no segment explains it — the signature of a change upstream of the auction.',
@@ -117,6 +123,64 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
       setOpenId(null);
     }
   };
+
+  // Advice is generated on demand, one case at a time, and cached in ClickHouse. Sequential
+  // rather than parallel: each case is two full agent turns, and firing ten at once buys
+  // nothing but a rate limit and a bill.
+  const [recsOn, setRecsOn] = useState(false);
+  const [recs, setRecs] = useState<Map<string, RecommendationSet>>(new Map());
+  const [generating, setGenerating] = useState<string | null>(null);
+  const queued = useRef(false);
+
+  const store = (set: RecommendationSet) => setRecs(prev => new Map(prev).set(set.case_id, set));
+
+  const generateFor = async (caseId: string, force: boolean) => {
+    if (!run || generating) return;
+    setGenerating(caseId);
+    try {
+      const res = await fetch('/api/recommendations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run: run.run_id, case_id: caseId, force }),
+      });
+      const body = await res.json();
+      if (body.set) store(body.set);
+    } catch (err) {
+      store({
+        case_id: caseId,
+        generated_at: new Date().toISOString(),
+        status: 'failed',
+        summary: '',
+        drafted: 0,
+        recommendations: [],
+        generation_model: '',
+        validation_model: '',
+        job_id: '',
+        error: (err as Error).message,
+      });
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  // Switching the toggle on loads what already exists. It does not start generating: paying
+  // twenty minutes of model time because somebody flipped a switch to see what it did is not
+  // a behaviour a reader can undo.
+  useEffect(() => {
+    if (!recsOn || !run || queued.current) return;
+    queued.current = true;
+    fetch(`/api/recommendations?run=${encodeURIComponent(run.run_id)}`)
+      .then(r => r.json())
+      .then((body: { sets?: Record<string, RecommendationSet> }) => {
+        if (body.sets) setRecs(new Map(Object.entries(body.sets)));
+      })
+      .catch(() => {});
+  }, [recsOn, run]);
+
+  const recsReady = useMemo(
+    () => [...recs.values()].filter(s => s.status === 'completed').length,
+    [recs],
+  );
 
   const byPri = useMemo(() => {
     const counts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
@@ -237,7 +301,26 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
                   ))}
                 </div>
 
-                <div className="row sp" style={{ gap: 6, width: 232 }}>
+                {/* Off by default. Everything else on this page is measured; this is a model
+                    proposing actions, and opting into that should be a decision rather than
+                    something a reader discovers already switched on. */}
+                <label className="aitog sp" title={AI_HINT}>
+                  <input
+                    type="checkbox"
+                    checked={recsOn}
+                    onChange={e => setRecsOn(e.target.checked)}
+                    aria-label="AI recommendations"
+                  />
+                  <span className="track">
+                    <span className="knob" />
+                  </span>
+                  <span className="lbl">
+                    AI Recommendations
+                    {recsOn && recsReady > 0 && <span className="n">{recsReady}</span>}
+                  </span>
+                </label>
+
+                <div className="row" style={{ gap: 6, width: 232 }}>
                   <span className="dim2" style={{ display: 'inline-flex' }}>
                     <SearchIcon />
                   </span>
@@ -268,7 +351,17 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
         <span className="sp">{run ? `${run.finished_at.slice(11, 16)} UTC` : ''}</span>
       </div>
 
-      {openCase && <CasePanel key={openCase.case_id} c={openCase} onClose={close} />}
+      {openCase && (
+        <CasePanel
+          key={openCase.case_id}
+          c={openCase}
+          onClose={close}
+          recommendations={recs.get(openCase.case_id) ?? null}
+          recsEnabled={recsOn}
+          recsBusy={generating === openCase.case_id}
+          onGenerate={force => generateFor(openCase.case_id, force)}
+        />
+      )}
     </div>
   );
 }

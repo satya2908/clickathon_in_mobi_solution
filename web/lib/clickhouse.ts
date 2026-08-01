@@ -22,6 +22,7 @@ function fromEnv() {
  *  connection limit on a cloud service within a few saves. */
 declare global {
   var __verdictCh: ClickHouseClient | undefined;
+  var __verdictChWrite: ClickHouseClient | undefined;
 }
 
 export function ch(): ClickHouseClient {
@@ -54,6 +55,24 @@ export async function rows<T>(query: string, params: Record<string, unknown> = {
     console.error(`[clickhouse] ${(err as Error).message}\n${query.slice(0, 400)}`);
     return [];
   }
+}
+
+/** A second, writable client, used for exactly one table.
+ *
+ *  The read client above is `readonly: '1'` on purpose, and that stays true: a console must
+ *  not be able to alter the evidence it displays. Recommendations are the one thing the
+ *  console produces rather than reports -- generating them costs about two minutes of model
+ *  time, so they are cached rather than recomputed on every page view, and caching means
+ *  writing. Keeping it in a separate client means the read path cannot acquire write
+ *  permission by accident, and a stray mutation in a query would still be refused. */
+export function chWrite(): ClickHouseClient {
+  if (!globalThis.__verdictChWrite) {
+    globalThis.__verdictChWrite = createClient({
+      ...fromEnv(),
+      clickhouse_settings: { max_execution_time: 30 },
+    });
+  }
+  return globalThis.__verdictChWrite;
 }
 
 /** ClickHouse `DateTime` comes back as `YYYY-MM-DD hh:mm:ss` with no zone marker, and the

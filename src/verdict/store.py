@@ -198,8 +198,23 @@ class Impact:
         }
 
 
+def _short(units: float, noun: str, over: int, denominator: str) -> str:
+    """Describe a movement in units without assuming which way it went."""
+    if units < 0:
+        return f"{abs(units):,.0f} {noun} short of expectation across {over:,} {denominator}"
+    return f"{units:,.0f} {noun} above expectation across {over:,} {denominator}"
+
+
 def estimate_impact(metric: str, observed: Counters, observed_value: float, expected_value: float) -> Impact:
-    """Convert a rate deviation into units lost, and into money where the funnel permits it.
+    """Convert a rate deviation into units gained or lost, and into money where the funnel permits.
+
+    Signed as observed minus expected, so a loss is negative and a recovery is positive. This
+    used to be the other way round -- a shortfall, positive when things got worse -- and every
+    consumer read it as a delta. A segment that lost 113 clicks was stored as ``+113`` and
+    rendered next to a downward arrow, and ``revenue at risk``, which sums ``min(0, revenue)``
+    to keep a recovery from cancelling a breakage, therefore summed nothing but zeroes and
+    reported no money at risk during an incident. The sign is the whole claim here, so it now
+    matches ``direction`` and needs no reader to know a convention.
 
     The conversion is only as sound as the shortest path from the metric to revenue. Fill rate
     reaches money through two further rates, each measured on the affected segment during the
@@ -210,72 +225,72 @@ def estimate_impact(metric: str, observed: Counters, observed_value: float, expe
     accrues on impressions, not clicks, so any money attached to lost clicks would be a
     downstream advertiser-value argument this system has no data to make.
     """
-    shortfall = expected_value - observed_value
+    delta = observed_value - expected_value
 
     if metric == "fill_rate":
-        lost_fills = shortfall * observed.requests
+        fills = delta * observed.requests
         render = observed.impressions / observed.fills if observed.fills else 0.0
         rev_per_impression = observed.revenue / observed.impressions if observed.impressions else 0.0
         return Impact(
-            units=lost_fills,
+            units=fills,
             unit="fills",
-            revenue=lost_fills * render * rev_per_impression,
+            revenue=fills * render * rev_per_impression,
             direct=False,
             basis=(
-                f"{lost_fills:,.0f} fills short of expectation across {observed.requests:,} requests",
+                _short(fills, "fills", observed.requests, "requests"),
                 f"carried to impressions at the segment's own render rate of {render:.4f}",
                 f"valued at the segment's own revenue per impression of {rev_per_impression:.6f}",
             ),
         )
 
     if metric == "render_rate":
-        lost_impressions = shortfall * observed.fills
+        impressions = delta * observed.fills
         rev_per_impression = observed.revenue / observed.impressions if observed.impressions else 0.0
         return Impact(
-            units=lost_impressions,
+            units=impressions,
             unit="impressions",
-            revenue=lost_impressions * rev_per_impression,
+            revenue=impressions * rev_per_impression,
             direct=False,
             basis=(
-                f"{lost_impressions:,.0f} impressions short across {observed.fills:,} fills",
+                _short(impressions, "impressions", observed.fills, "fills"),
                 f"valued at the segment's own revenue per impression of {rev_per_impression:.6f}",
             ),
         )
 
     if metric == "ctr":
-        lost_clicks = shortfall * observed.impressions
+        clicks = delta * observed.impressions
         return Impact(
-            units=lost_clicks,
+            units=clicks,
             unit="clicks",
             revenue=None,
             direct=False,
             basis=(
-                f"{lost_clicks:,.0f} clicks short across {observed.impressions:,} impressions",
+                _short(clicks, "clicks", observed.impressions, "impressions"),
                 "no revenue figure: revenue accrues on impressions in this dataset, not clicks",
             ),
         )
 
     if metric == "ecpm":
-        lost = shortfall * observed.impressions / 1000.0
+        money = delta * observed.impressions / 1000.0
         return Impact(
-            units=lost,
+            units=money,
             unit="revenue",
-            revenue=lost,
+            revenue=money,
             direct=True,
-            basis=(f"eCPM shortfall of {shortfall:.4f} over {observed.impressions:,} impressions",),
+            basis=(f"eCPM moved {delta:+.4f} over {observed.impressions:,} impressions",),
         )
 
     if metric == "rpr":
-        lost = shortfall * observed.requests
+        money = delta * observed.requests
         return Impact(
-            units=lost,
+            units=money,
             unit="revenue",
-            revenue=lost,
+            revenue=money,
             direct=True,
-            basis=(f"revenue-per-request shortfall of {shortfall:.6f} over {observed.requests:,} requests",),
+            basis=(f"revenue per request moved {delta:+.6f} over {observed.requests:,} requests",),
         )
 
-    return Impact(units=shortfall, unit=metric, revenue=None, direct=False, basis=())
+    return Impact(units=delta, unit=metric, revenue=None, direct=False, basis=())
 
 
 def _check_score(candidate: Candidate, name: str) -> float:
