@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1143,18 +1144,31 @@ def template_narration(bundle: EvidenceBundle) -> str:
     sentences were written next to the arithmetic that produced them and are the least likely
     thing in the system to drift away from what was computed.
     """
-    paragraphs = [bundle.headline]
-    for section in (
-        _template_movement,
-        _template_counterfactual,
-        _template_exoneration,
-        _template_coverage,
-        _template_confidence,
+    blocks = [bundle.headline]
+    for heading, section in (
+        ("What moved", _template_movement),
+        ("Why this segment", _template_counterfactual),
+        ("What was ruled out", _template_exoneration),
+        ("What could not be tested", _template_coverage),
+        ("Confidence", _template_confidence),
     ):
         text = section(bundle)
         if text:
-            paragraphs.append(text)
-    return "\n\n".join(paragraphs)
+            blocks.append(f"## {heading}\n{text}")
+    return "\n\n".join(blocks)
+
+
+def _bullets(lines: Sequence[str]) -> str:
+    """One finding per line.
+
+    These sections used to be joined with a space into paragraphs, and the result was a
+    seventeen-line block in which the sufficiency test, the maximality test and the holdout
+    test were three sentences deep in the same run of text. Each of those is a separate
+    question with a separate answer, and a reader scanning for the one that failed should not
+    have to read the other two to find it. The leading dash is safe against the numeric
+    verifier, which compares magnitudes rather than signs.
+    """
+    return "\n".join(f"- {line}" for line in lines if line)
 
 
 def _claim_map(bundle: EvidenceBundle) -> dict[str, Claim]:
@@ -1214,7 +1228,7 @@ def _template_movement(bundle: EvidenceBundle) -> str:
 
     if bundle.mode == "structural_only" and bundle.note:
         sentences.append(bundle.note)
-    return " ".join(sentences)
+    return _bullets(sentences)
 
 
 def _template_counterfactual(bundle: EvidenceBundle) -> str:
@@ -1228,7 +1242,7 @@ def _template_counterfactual(bundle: EvidenceBundle) -> str:
         ]
         for entry in bundle.ruled_out[:4]:
             lines.append(f"{entry.segment} was recorded as {entry.status}: {entry.reason}")
-        return " ".join(lines)
+        return _bullets(lines)
 
     if bundle.mode == "structural_only":
         # Saying the verdict rests on removing the segment from a parent that never moved
@@ -1252,7 +1266,7 @@ def _template_counterfactual(bundle: EvidenceBundle) -> str:
             continue
         lines.append(f"The {check.name} test {verbs.get(check.state, check.state)}: "
                      f"{check.detail}")
-    return " ".join(lines)
+    return _bullets(lines)
 
 
 def _template_exoneration(bundle: EvidenceBundle) -> str:
@@ -1284,7 +1298,7 @@ def _template_exoneration(bundle: EvidenceBundle) -> str:
     if len(bundle.cleared) > 3:
         lines.append("The remaining cleared segments are listed in the evidence file with the "
                      "same predicted and observed pair, so any of them can be checked by hand.")
-    return " ".join(lines)
+    return _bullets(lines)
 
 
 def _template_coverage(bundle: EvidenceBundle) -> str:
@@ -1306,7 +1320,7 @@ def _template_coverage(bundle: EvidenceBundle) -> str:
     ]
     for gap in bundle.coverage[:3]:
         lines.append(f"On {gap.segment} -- {gap.detail}")
-    return " ".join(lines)
+    return _bullets(lines)
 
 
 def _template_confidence(bundle: EvidenceBundle) -> str:
@@ -1324,7 +1338,7 @@ def _template_confidence(bundle: EvidenceBundle) -> str:
     caveat = claims.get("confidence.caveat")
     if caveat is not None and isinstance(caveat.value, str):
         parts.append(caveat.value)
-    return " ".join(parts)
+    return _bullets(parts)
 
 
 _SYSTEM_PROMPT = (
@@ -1343,8 +1357,39 @@ _SYSTEM_PROMPT = (
     "4. Keep the direction of every change exactly as the claim states it.\n"
     "5. Quote segment names verbatim. Do not invent one and do not attach a figure to a "
     "segment other than the one whose claim carries it.\n"
-    "6. Write three to five short paragraphs of plain prose. No headings, no bullet points, no "
-    "markdown.\n"
+    "6. Structure the answer so it can be scanned, not read start to finish. On-call engineers\n"
+    "read these while something is broken; a wall of prose buries the one line that matters.\n"
+    "Use exactly this shape:\n"
+    "\n"
+    "    One sentence stating the verdict. No heading above it.\n"
+    "\n"
+    "    ## What moved\n"
+    "    - one fact per line: the segment, the figures, and which detector flagged it\n"
+    "\n"
+    "    ## Why this segment\n"
+    "    - one test per line: name it, say whether it held or failed, and give the reason the\n"
+    "      test itself supplied, with its figures\n"
+    "\n"
+    "    ## What was ruled out\n"
+    "    - one cleared candidate per line, with its predicted and observed figures. Include a\n"
+    "      candidate here only if both figures are given to you. A candidate with no figures\n"
+    "      was not cleared by prediction and belongs in the section below, not in this one.\n"
+    "\n"
+    "    ## What could not be tested\n"
+    "    - one gap per line, saying what could not be established about that segment\n"
+    "\n"
+    "    ## Confidence\n"
+    "    - the overall figure, then one component per line\n"
+    "\n"
+    "7. Every bullet must carry its substance, not a label for it. \"The sufficiency test\n"
+    "failed\" on its own is useless to a reader deciding what to do next; the input gives you\n"
+    "the explanation each test produced, and the bullet has to carry it. Never write a bare\n"
+    "reason code such as `not_cleared_quantitatively` or `minimality_untested` -- say what it\n"
+    "means in words. A bullet is one sentence, not one phrase.\n"
+    "\n"
+    "8. Omit any section with nothing to report rather than writing that it is empty. The only\n"
+    "markup permitted is `## ` for a heading and `- ` for a bullet: no bold, no italics, no\n"
+    "tables, no numbered lists.\n"
     "\n"
     "A draft containing one figure that is not in the claim list is discarded in full and "
     "replaced by a template, so an unsupported number costs the entire answer."

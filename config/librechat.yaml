@@ -24,13 +24,26 @@ endpoints:
       apiKey: '${LLM_API_KEY}'
       baseURL: '${LLM_BASE_URL}'
       models:
-        default: ['${LLM_MODEL}']
+        # Names are written out here rather than as ${LLM_MODEL}. LibreChat resolves environment
+        # references in `apiKey` and `baseURL` -- those two demonstrably reach Google -- but not
+        # in model fields, which are passed through verbatim. The literal string "${LLM_MODEL}"
+        # was being sent as a model name, and the chat answered every message with
+        # "404 status code (no body) ... MODEL_NOT_FOUND".
+        #
+        # The `models/` prefix is required: that is the form the fetched list uses, and a bare
+        # name does not match an entry in it.
+        #
+        # Lite rather than full flash because the free tier allows 20 requests per day per
+        # model, and the engine's narration step spends the same allowance against the same
+        # key. Note also that models/gemini-2.5-flash appears in the fetched list but answers
+        # 404 NOT_FOUND on this key -- being listed is not the same as being callable.
+        default: ['models/gemini-flash-lite-latest']
         # Pull the account's real model list at boot rather than pinning names here. Free-tier
         # model availability changes, and a hardcoded name that Google has retired shows up as an
         # empty dropdown with no explanation.
         fetch: true
       titleConvo: true
-      titleModel: '${LLM_MODEL}'
+      titleModel: 'models/gemini-flash-lite-latest'
       modelDisplayLabel: 'Gemini'
       # Tools are the entire point: without function calling the model cannot reach the MCP
       # server, and the chat degrades to a plausible-sounding narrator with no access to the data.
@@ -53,7 +66,7 @@ modelSpecs:
       description: 'Reads the same ClickHouse rollups the detectors read.'
       preset:
         endpoint: 'Gemini'
-        model: '${LLM_MODEL}'
+        model: 'models/gemini-flash-lite-latest'
         greeting: |
           Ask about any run, case, or segment. I query the same rollup tables the detectors
           read, so anything I tell you can be checked against the case file.

@@ -130,12 +130,15 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
   const [recsOn, setRecsOn] = useState(false);
   const [recs, setRecs] = useState<Map<string, RecommendationSet>>(new Map());
   const [generating, setGenerating] = useState<string | null>(null);
-  const queued = useRef(false);
+  const [pending, setPending] = useState(0);
+  // Holds the run the queue was started for, so switching runs restarts it and a re-render
+  // does not.
+  const queued = useRef<string | null>(null);
 
   const store = (set: RecommendationSet) => setRecs(prev => new Map(prev).set(set.case_id, set));
 
-  const generateFor = async (caseId: string, force: boolean) => {
-    if (!run || generating) return;
+  async function generateFor(caseId: string, force: boolean) {
+    if (!run) return;
     setGenerating(caseId);
     try {
       const res = await fetch('/api/recommendations', {
@@ -161,20 +164,51 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
     } finally {
       setGenerating(null);
     }
-  };
+  }
 
-  // Switching the toggle on loads what already exists. It does not start generating: paying
-  // twenty minutes of model time because somebody flipped a switch to see what it did is not
-  // a behaviour a reader can undo.
+  // Switching the toggle on loads what exists and then generates the rest, one at a time,
+  // so nobody has to open each case and press a button. Only the missing ones: a case that
+  // already has advice is never regenerated, because each one costs about two minutes of
+  // model time and the results do not change unless the case does.
+  //
+  // Sequential on purpose. Firing seven at once buys a rate limit, and doing them in order
+  // means the queue can be abandoned part-way with everything finished so far kept.
   useEffect(() => {
-    if (!recsOn || !run || queued.current) return;
-    queued.current = true;
-    fetch(`/api/recommendations?run=${encodeURIComponent(run.run_id)}`)
-      .then(r => r.json())
-      .then((body: { sets?: Record<string, RecommendationSet> }) => {
+    if (!recsOn || !run) return;
+    if (queued.current === run.run_id) return;
+    queued.current = run.run_id;
+
+    let cancelled = false;
+    (async () => {
+      let missing: string[] = [];
+      try {
+        const res = await fetch(`/api/recommendations?run=${encodeURIComponent(run.run_id)}`);
+        const body = (await res.json()) as { sets?: Record<string, RecommendationSet>; missing?: string[] };
+        if (cancelled) return;
         if (body.sets) setRecs(new Map(Object.entries(body.sets)));
-      })
-      .catch(() => {});
+        missing = body.missing ?? [];
+      } catch {
+        return;
+      }
+
+      setPending(missing.length);
+      for (const caseId of missing) {
+        if (cancelled) return;
+        await generateFor(caseId, false);
+        if (cancelled) return;
+        setPending(n => Math.max(0, n - 1));
+      }
+    })();
+
+    // Turning the toggle off abandons the queue. Anything already generated is in ClickHouse
+    // and comes straight back if it is switched on again -- which requires clearing the guard
+    // here, or the second switch-on matches the run it already ran for and returns without
+    // reloading anything, leaving the panel permanently empty.
+    return () => {
+      cancelled = true;
+      queued.current = null;
+      setPending(0);
+    };
   }, [recsOn, run]);
 
   const recsReady = useMemo(
@@ -316,7 +350,13 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
                   </span>
                   <span className="lbl">
                     AI Recommendations
-                    {recsOn && recsReady > 0 && <span className="n">{recsReady}</span>}
+                    {recsOn && pending > 0 && (
+                      <span className="n busy" title={`${pending} case(s) still to generate`}>
+                        <span className="spin xs" />
+                        {pending}
+                      </span>
+                    )}
+                    {recsOn && pending === 0 && recsReady > 0 && <span className="n">{recsReady}</span>}
                   </span>
                 </label>
 

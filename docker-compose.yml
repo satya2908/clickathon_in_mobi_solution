@@ -130,12 +130,10 @@ services:
       NEXT_PUBLIC_CHAT_URL: ${NEXT_PUBLIC_CHAT_URL:-http://localhost:${LIBRECHAT_PORT:-3080}}
       NEXT_PUBLIC_HYPERDX_URL: ${NEXT_PUBLIC_HYPERDX_URL:-https://hyperdx.clickhouse.cloud}
 
-      # The remediation service that writes the Actions tab. Unlike the two above this one is
-      # called by the server, not the browser, so it needs a name that resolves inside the
-      # container: `localhost` here would be the container itself. `host.docker.internal` is
-      # the host, which is where the service runs. If the service is down the toggle still
-      # works and every case simply reports that advice could not be generated.
-      RECOMMEND_URL: ${RECOMMEND_URL:-http://host.docker.internal:8157}
+      # Called by the server rather than the browser. The separately managed remediation
+      # container joins this Compose network and is reached directly by Docker DNS, avoiding
+      # host loopback forwarding entirely. Host-side `next dev` still defaults to localhost.
+      RECOMMEND_URL: ${RECOMMEND_URL:-http://cursor-cli-agent:8157}
     extra_hosts:
       # Docker Desktop provides this automatically; Linux does not.
       - "host.docker.internal:host-gateway"

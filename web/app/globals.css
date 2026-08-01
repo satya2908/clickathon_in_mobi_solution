@@ -345,6 +345,26 @@ a.kpi:hover { border-color: var(--line2); }
 .narbody p.lead { font-size: 13.5px; color: var(--tx); font-weight: 500; }
 .narbody p:not(.lead) { color: var(--tx2); }
 
+/* Section headings. Small and quiet: they are signposts for a reader scanning for the one
+   answer they came for, not titles competing with the findings underneath them. */
+.narh {
+  margin: 20px 0 7px; font-size: 10px; font-weight: 600; letter-spacing: 0.11em;
+  text-transform: uppercase; color: var(--tx3);
+}
+.narh:first-child { margin-top: 4px; }
+
+/* One finding per line. The marker is a dash rather than a disc because these are statements
+   of fact rather than options, and it matches the plain-text form stored in ClickHouse. */
+.narlist { margin: 0; padding: 0; list-style: none; }
+.narlist li {
+  position: relative; padding-left: 15px; margin-bottom: 5px;
+  font-size: 12.5px; line-height: 1.65; color: var(--tx2);
+}
+.narlist li:last-child { margin-bottom: 0; }
+.narlist li::before {
+  content: '\2013'; position: absolute; left: 0; top: 0; color: var(--tx3);
+}
+
 /* Figures set apart from the prose, so a reader can scan the numbers without reading the
    sentences. Presentation only -- nothing here reformats a value, because every one of them
    was checked against the evidence bundle in the form it is printed. */
@@ -639,3 +659,10 @@ html { scrollbar-color: var(--scroll) transparent; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+
+/* Queue progress on the toggle: how many cases are still to generate. Shown on the control
+   itself because the work is invisible otherwise -- it happens one case at a time in the
+   background, and a reader who opened a case that has not been reached yet should be able to
+   tell that from waiting on something that is never coming. */
+.aitog .lbl .n.busy { display: inline-flex; align-items: center; gap: 4px; }
+.spin.xs { width: 8px; height: 8px; border-width: 1.5px; margin-top: 0; }

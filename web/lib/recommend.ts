@@ -90,6 +90,31 @@ async function post(path: string, body: unknown): Promise<Response> {
   });
 }
 
+function connectionHint(): string {
+  let host: string;
+  try {
+    host = new URL(SERVICE).hostname;
+  } catch {
+    return 'RECOMMEND_URL must be a valid absolute URL.';
+  }
+  if (host === 'cursor-cli-agent') {
+    return (
+      'Start the cursor-cli-agent Compose service and ensure it is attached to the ' +
+      'verdict_default Docker network.'
+    );
+  }
+  if (host === 'host.docker.internal') {
+    return (
+      'A loopback-only SSH forward is not reachable from Docker; bind the forward to an ' +
+      'address visible to the container or use the shared Docker network.'
+    );
+  }
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'Start the remediation service on the host; localhost is only valid for host-side development.';
+  }
+  return 'Check the configured address, service health, and network route.';
+}
+
 /** Runs both passes and returns the validated set. Throws with a readable message; the caller
  *  turns that into a stored `failed` row so a broken run is visible rather than looking like
  *  a case nobody has generated advice for yet. */
@@ -103,15 +128,9 @@ export async function generate(c: Case): Promise<RecommendationSet> {
       max_recommendations: 5,
     });
   } catch (err) {
-    // Overwhelmingly the common failure, and it has a specific cause worth naming. The
-    // service is often reached over an SSH forward, and `ssh -L 8157:...` binds loopback
-    // only, which the host can reach and a container cannot. "fetch failed" sends a reader
-    // looking for a bug in the console; this sends them to the tunnel.
     throw new Error(
       `cannot reach the remediation service at ${SERVICE} (${(err as Error).message}). ` +
-        `From inside Docker this must not be localhost, and a loopback-bound SSH forward is ` +
-        `not reachable from a container -- forward with -L 0.0.0.0:8157 and set ` +
-        `RECOMMEND_URL=http://host.docker.internal:8157.`,
+        connectionHint(),
     );
   }
   if (!accepted.ok) {
