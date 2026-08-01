@@ -94,12 +94,26 @@ async function post(path: string, body: unknown): Promise<Response> {
  *  turns that into a stored `failed` row so a broken run is visible rather than looking like
  *  a case nobody has generated advice for yet. */
 export async function generate(c: Case): Promise<RecommendationSet> {
-  const accepted = await post('/v1/remediations', {
-    case_id: c.case_id,
-    case_data: digest(c),
-    additional_context: CONTEXT,
-    max_recommendations: 5,
-  });
+  let accepted: Response;
+  try {
+    accepted = await post('/v1/remediations', {
+      case_id: c.case_id,
+      case_data: digest(c),
+      additional_context: CONTEXT,
+      max_recommendations: 5,
+    });
+  } catch (err) {
+    // Overwhelmingly the common failure, and it has a specific cause worth naming. The
+    // service is often reached over an SSH forward, and `ssh -L 8157:...` binds loopback
+    // only, which the host can reach and a container cannot. "fetch failed" sends a reader
+    // looking for a bug in the console; this sends them to the tunnel.
+    throw new Error(
+      `cannot reach the remediation service at ${SERVICE} (${(err as Error).message}). ` +
+        `From inside Docker this must not be localhost, and a loopback-bound SSH forward is ` +
+        `not reachable from a container -- forward with -L 0.0.0.0:8157 and set ` +
+        `RECOMMEND_URL=http://host.docker.internal:8157.`,
+    );
+  }
   if (!accepted.ok) {
     throw new Error(`remediation service refused the case (${accepted.status}): ${(await accepted.text()).slice(0, 300)}`);
   }
