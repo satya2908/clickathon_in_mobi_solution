@@ -137,14 +137,34 @@ class DetectionResult:
         self.corrected = self.corrected and other.corrected
 
 
+#: Weekly samples a segment must contribute before it can inform the dispersion estimate. Two
+#: gives one residual per segment, which says nothing on its own but pools across hundreds of
+#: segments into an estimate with ample degrees of freedom. One gives no residual at all: with a
+#: single observation the centre and the observation coincide and the residual is zero by
+#: construction, which would read as perfectly behaved traffic rather than as no information.
+_MIN_DISPERSION_WEEKS = 2
+
+
 def estimate_dispersion(
     history: dict[Segment, list[Counters]], metric: Metric, cfg: DetectionConfig
-) -> float:
+) -> float | None:
     """Estimate the overdispersion factor from the historical arms only.
 
-    Pooling across every segment of a combo at once is what makes this usable: each segment
-    contributes only four weekly samples, but the estimate is formed from all segments
-    together and so carries hundreds of degrees of freedom rather than three.
+    Returns ``None`` when the history cannot support an estimate, which the caller must treat
+    as "this combo cannot be tested" rather than substituting a number.
+
+    That distinction is the whole point of the return type. This used to return 1.0 in the
+    no-data case, and 1.0 is not a neutral default -- it is the strongest possible claim the
+    function can make, asserting that the metric is exactly as well behaved as a textbook
+    binomial or Poisson variable with no unmodelled structure at all. Real ad traffic never is.
+    Measured on eight days of this corpus with nothing planted in them, the windows that fell
+    back to that default produced confident accusations at two per day, including a 13.9% move
+    in clicks priced at p = 7.3e-223. Every one of those cells was judged against a variance
+    nobody had measured.
+
+    Pooling across every segment of a combo at once is what makes an estimate possible at all:
+    each segment contributes only a handful of weekly samples, but the estimate is formed from
+    all segments together and so carries hundreds of degrees of freedom rather than three.
 
     The window under investigation is deliberately excluded. Including it would let a genuine
     incident inflate the very dispersion figure used to judge whether it is significant, and
@@ -160,7 +180,7 @@ def estimate_dispersion(
             usable = [c for c in hist if c.denominator(metric) and c.denominator(metric) > 0]
         else:
             usable = [c for c in hist if c.requests > 0]
-        if len(usable) < 3:
+        if len(usable) < _MIN_DISPERSION_WEEKS:
             continue
 
         if is_proportion:
@@ -188,7 +208,7 @@ def estimate_dispersion(
             return 1.0
 
     if not cells:
-        return 1.0
+        return None
 
     # Robust rather than mean-based. The baseline window can itself contain an incident -- it
     # does in this corpus -- and a mean of squared residuals lets that one week set the
@@ -334,7 +354,26 @@ def _detect_temporal_combo(
     if not history:
         return result
 
-    phi = estimate_dispersion(history, metric, cfg)
+    measured = estimate_dispersion(history, metric, cfg)
+    if measured is None:
+        # No test is run against a variance nobody measured. Reporting the cells as gaps rather
+        # than dropping them silently is the difference between "we looked and found nothing"
+        # and "we could not look", and only the second is true here. The usual cause is a window
+        # near the start of the data, where a weekly baseline has at most one aligned sample.
+        for segment, weeks in history.items():
+            den = (weeks[0].denominator(metric) if metric.is_ratio else weeks[0].requests) or 0.0
+            result.gaps.append(
+                CoverageGap(
+                    metric=metric.name,
+                    segment=segment,
+                    denominator=den,
+                    required=0.0,
+                    reason="dispersion_unmeasurable",
+                )
+            )
+        return result
+
+    phi = measured
     result.dispersion[f"{metric.name}:{combo}"] = phi
 
     # Sized once per combo from the combo's own overall rate, so the floor reflects this

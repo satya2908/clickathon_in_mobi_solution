@@ -109,15 +109,20 @@ def outcome_for(case: object, expected: dict[str, str]) -> str:
 # every known movement falls between 16 June and 30 June, so what remains at either end is clean
 # without anyone having examined it for quietness. Picking windows because they looked calm would
 # make this measure nothing at all.
+# The split matters as much as the windows. A weekly baseline needs at least two aligned
+# samples before the spread between them can be measured at all, and with the corpus opening on
+# 1 June that arrives on 15 June. Windows before it are kept deliberately: the system should now
+# decline to test them and say so, and a run where they start producing verdicts again is a
+# regression that the headline number alone would hide.
 CONTROL_WINDOWS = [
-    ("early-1", datetime(2026, 6, 8), 24),
-    ("early-2", datetime(2026, 6, 9), 24),
-    ("early-3", datetime(2026, 6, 10), 24),
-    ("early-4", datetime(2026, 6, 11), 24),
-    ("early-5", datetime(2026, 6, 12), 24),
-    ("late-1", datetime(2026, 7, 1), 24),
-    ("late-2", datetime(2026, 7, 2), 24),
-    ("late-3", datetime(2026, 7, 3), 24),
+    ("thin-1", datetime(2026, 6, 8), 24, False),
+    ("thin-2", datetime(2026, 6, 10), 24, False),
+    ("thin-3", datetime(2026, 6, 12), 24, False),
+    ("full-1", datetime(2026, 6, 15), 24, True),
+    ("full-2", datetime(2026, 7, 1), 24, True),
+    ("full-3", datetime(2026, 7, 2), 24, True),
+    ("full-4", datetime(2026, 7, 3), 24, True),
+    ("full-5", datetime(2026, 7, 4), 24, True),
 ]
 
 
@@ -135,9 +140,8 @@ def run_controls(cfg, registry, ch, grain: str, threshold: float) -> int:
     print(f"{'window':<10} {'date':<12} {'accused':<11} {'unattributed':<13} {'worst false accusation':<45}")
     print("-" * 108)
 
-    total_accused = 0
-    total_unattributed = 0
-    for name, start, hours in CONTROL_WINDOWS:
+    tally = {True: [0, 0, 0], False: [0, 0, 0]}  # accused, unattributed, windows
+    for name, start, hours, testable in CONTROL_WINDOWS:
         window = Window(start=start, end=start + timedelta(hours=hours), grain=grain)
         result = investigate(
             cfg, ch, registry, window, tracer=NullTracer(), persist=False, narrate=False
@@ -151,19 +155,26 @@ def run_controls(cfg, registry, ch, grain: str, threshold: float) -> int:
             top = max(confident, key=lambda c: c.confidence_value)
             worst = f"{top.finding.metric} {top.segment.label()[:26]} conf={top.confidence_value:.2f}"
 
-        total_accused += len(confident)
-        total_unattributed += unattributed
-        print(
-            f"{name:<10} {start:%Y-%m-%d}   {len(confident):<11} {unattributed:<13} {worst:<45}"
-        )
+        bucket = tally[testable]
+        bucket[0] += len(confident)
+        bucket[1] += unattributed
+        bucket[2] += 1
+        print(f"{name:<10} {start:%Y-%m-%d}   {len(confident):<11} {unattributed:<13} {worst:<45}")
 
     print("-" * 108)
-    n = len(CONTROL_WINDOWS)
-    print(
-        f"false accusations: {total_accused} across {n} clean day(s) "
-        f"at confidence >= {threshold:.2f}   ({total_accused / n:.2f} per day)"
-    )
-    print(f"unattributed detections: {total_unattributed} ({total_unattributed / n:.2f} per day)")
+    for testable, label in ((True, "enough baseline to test"), (False, "too little baseline")):
+        acc, unatt, n = tally[testable]
+        if not n:
+            continue
+        print(
+            f"{label:<26} {n} day(s): {acc} false accusation(s) at conf >= {threshold:.2f} "
+            f"({acc / n:.2f}/day), {unatt} unattributed ({unatt / n:.2f}/day)"
+        )
+    if tally[False][0] or tally[False][1]:
+        print(
+            "\nWARNING: windows with under two aligned baseline weeks produced output. The "
+            "dispersion estimate cannot be formed there, so nothing should have been tested."
+        )
     print("=" * 108 + "\n")
     return 0
 

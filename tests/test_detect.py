@@ -24,6 +24,7 @@ from verdict.detect import (
     _denominator_floor,
     _lattice_combos,
     apply_correction,
+    estimate_dispersion,
 )
 from verdict.metrics import MetricRegistry
 from verdict.query import Counters, Segment, Window
@@ -324,6 +325,38 @@ class TestDispersionSurvivesAContaminatedBaseline:
     def test_no_usable_residuals_falls_back_to_one(self):
         assert robust_dispersion([]) == 1.0
         assert robust_dispersion([float("nan"), float("inf")]) == 1.0
+
+
+class TestUnmeasurableDispersionIsNotAssumedAway:
+    """One is not a neutral default for an unmeasured variance.
+
+    A phi of 1.0 asserts the metric is exactly as well behaved as a textbook binomial variable
+    with no unmodelled structure whatsoever, which is the strongest claim the estimator can
+    make rather than the weakest. Returning it when there was nothing to measure meant windows
+    near the start of the data -- where a weekly baseline has at most one aligned sample -- were
+    judged against a variance nobody had computed. Measured over eight planted-free days that
+    produced confident accusations at two per day, one of them a 13.9% move priced at 1e-223.
+    """
+
+    def counters(self, rate: float = 0.78) -> Counters:
+        return Counters(requests=100_000, fills=int(100_000 * rate))
+
+    def history(self, weeks: int) -> dict:
+        # weeks[0] is the window under investigation; the rest is the baseline it is judged on.
+        return {SEGMENT: [self.counters()] + [self.counters()] * weeks}
+
+    def test_a_single_baseline_week_cannot_estimate_dispersion(self):
+        metric = REGISTRY.metric("fill_rate")
+        assert estimate_dispersion(self.history(1), metric, DetectionConfig()) is None
+
+    def test_two_baseline_weeks_are_enough_because_segments_pool(self):
+        """One residual per segment says nothing alone and everything in aggregate."""
+        metric = REGISTRY.metric("fill_rate")
+        assert estimate_dispersion(self.history(2), metric, DetectionConfig()) is not None
+
+    def test_no_history_at_all_is_unmeasurable_rather_than_well_behaved(self):
+        metric = REGISTRY.metric("fill_rate")
+        assert estimate_dispersion({}, metric, DetectionConfig()) is None
 
 
 class TestLatticeMatchesGrain:
