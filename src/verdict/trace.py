@@ -43,10 +43,15 @@ class Step:
     duration_ms: int = 0
     span_id: str = ""
     attributes: dict[str, Any] = field(default_factory=dict)
+    # 32 hex characters, distinct from the 16 of span_id. Kept off as_row because case_steps has
+    # no column for it; the trace id belongs to the whole investigation, not to one step, and it
+    # is carried on the case.
+    trace_id: str = ""
 
     def as_row(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("attributes")
+        d.pop("trace_id")
         return d
 
 
@@ -150,7 +155,9 @@ class Tracer:
             return
 
         with self._otel_tracer.start_as_current_span(name) as otel_span:
-            step.span_id = format(otel_span.get_span_context().span_id, "016x")
+            context = otel_span.get_span_context()
+            step.span_id = format(context.span_id, "016x")
+            step.trace_id = format(context.trace_id, "032x")
             try:
                 yield Span(step, otel_span)
             except Exception as exc:
@@ -163,10 +170,17 @@ class Tracer:
 
     @property
     def trace_id(self) -> str:
-        """The trace id of the first recorded span, used to deep-link a case into HyperDX."""
+        """The trace id of the first recorded span, used to deep-link a case into HyperDX.
+
+        This returned ``span_id`` until it was checked against the exported data: 16 hex
+        characters where a trace id is 32, so every stored value matched a ``SpanId`` in
+        ``otel_traces`` and none matched a ``TraceId``. HyperDX searches by trace, so the deep
+        link the field exists for would have found nothing -- and silently, since a trace
+        viewer given an unknown id shows an empty result rather than an error.
+        """
         for step in self.steps:
-            if step.span_id:
-                return step.span_id
+            if step.trace_id:
+                return step.trace_id
         return ""
 
     def steps_for_case(self, case_id: str) -> list[dict[str, Any]]:

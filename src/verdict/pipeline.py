@@ -259,6 +259,48 @@ def investigate(
     narrate: bool = True,
     max_cases: int = 25,
 ) -> InvestigationResult:
+    """Investigate one window under a single root span.
+
+    The root exists so the run is one trace rather than several. Each stage used to open its own
+    top-level span, and a top-level span starts a new trace: one run produced 56 traces across
+    287 spans, with detect, correct, localize, confidence and narrate all unconnected. A case
+    stores one trace id to deep-link a reader into HyperDX, so that link opened whichever
+    fragment the case happened to capture instead of the investigation that produced it.
+
+    Nesting everything here also makes the trace match the mental model the case file describes:
+    one investigation, with the stages inside it in the order they ran.
+    """
+    tracer = tracer or NullTracer()
+    with tracer.span("investigate", kind="pipeline") as span:
+        span.what(f"Investigating {window.label()} at {window.grain} grain")
+        span.why(
+            "One root span per run, so every stage below shares a trace id and the case can "
+            "link a reader to the whole investigation rather than to one stage of it."
+        )
+        result = _investigate(
+            cfg, ch, registry, window,
+            metrics=metrics, tracer=tracer, persist=persist,
+            narrate=narrate, max_cases=max_cases,
+        )
+        span.result(
+            f"{len(result.cases)} case(s) from {result.findings_after_correction} finding(s) "
+            f"that survived correction"
+        )
+        return result
+
+
+def _investigate(
+    cfg: Config,
+    ch: ClickHouse,
+    registry: MetricRegistry,
+    window: Window,
+    *,
+    metrics: list[str] | None = None,
+    tracer: Tracer | None = None,
+    persist: bool = True,
+    narrate: bool = True,
+    max_cases: int = 25,
+) -> InvestigationResult:
     """Investigate one window and return everything concluded about it."""
     tracer = tracer or NullTracer()
     run_id = tracer.run_id or uuid.uuid4().hex
