@@ -1,11 +1,34 @@
 'use client';
 
 import { SortIcon } from './icons';
+import { Segment } from './Segment';
 import { PUBLISH_THRESHOLD } from '@/lib/data';
-import { ARROW, clearedOf, KIND_BADGE, KIND_LABEL, metricValue, money, pct, priority } from '@/lib/format';
+import { ARROW, clearedOf, impact, KIND_BADGE, KIND_LABEL, metricValue, pct, priority } from '@/lib/format';
 import type { Case } from '@/lib/types';
 
 export type Sort = 'priority' | 'effect' | 'confidence' | 'impact';
+
+/** Every heading here is a term of art, and several are terms this system invented. A reader
+ *  who cannot tell `Expected` from `Observed`, or who reads `Cleared` as "resolved" rather
+ *  than "exonerated", will misread the whole table -- so each one says what it means. */
+const HINT: Record<string, string> = {
+  Pri: 'Impact weighted by confidence, so a large number nobody can stand behind does not outrank a proven small one. P0 is the most urgent.',
+  Metric: 'The metric that moved. The arrow is the direction of the move.',
+  Effect: 'How far the accused segment moved, relative to what was expected of it.',
+  Segment:
+    'The slice being accused. Multiple pills mean the intersection of them moved, and neither dimension moved on its own.',
+  Verdict:
+    'localized: a segment was named and the removal test held. unlocalized: real movement, no segment explains it. undecomposed: a lead that failed its breadth checks. no data: too little traffic to decompose.',
+  Observed: 'What the accused segment actually read over the window.',
+  Expected: 'The median of the same weekday and hour over prior baseline weeks.',
+  Conf: `A weighted sum of five named checks, not a model output. Components that could not run contribute zero rather than being renormalised away. Published above ${PUBLISH_THRESHOLD.toFixed(2)}.`,
+  Impact:
+    'Estimated revenue effect. Some are reached through a chain of estimates rather than measured directly; the basis is on the case.',
+  Cleared:
+    'Candidates tested and genuinely exonerated, over candidates considered. Says what was ruled out, not only what was found.',
+  Gaps: 'Cells that could not be tested at all — too little traffic, or no usable baseline. Published rather than dropped, because an untested segment is not an innocent one.',
+  Flags: 'Anything about this case that should be read before the verdict is trusted.',
+};
 
 /** At most one flag per row, by severity. Two badges is a tie the eye has to break;
  *  the overflow count says a second exists without competing for the scan. */
@@ -16,6 +39,15 @@ function flagsOf(c: Case): { label: string; cls: string }[] {
   if (c.recurrence_of) flags.push({ label: 'recurrence', cls: 'badge w' });
   return flags;
 }
+
+/** Why this cell reads in fills rather than dollars, said on the cell rather than in a
+ *  footnote nobody reaches. */
+const impactHint = (c: Case): string =>
+  c.impact_json.revenue == null
+    ? `No defensible conversion to revenue for ${c.metric}, so the move is reported in ${c.impact_json.unit}.`
+    : c.impact_json.direct
+      ? 'Measured directly.'
+      : `Reached through a chain of estimates: ${c.impact_json.basis.join(' -> ') || 'see the case'}.`;
 
 const COLS: { w: number; r?: boolean }[] = [
   { w: 3 },
@@ -47,14 +79,14 @@ export function CaseTable({
   onOpen: (id: string) => void;
 }) {
   const Th = ({ label, k, r }: { label: string; k?: Sort; r?: boolean }) => (
-    <th className={r ? 'r' : undefined} aria-sort={k === sort ? 'ascending' : undefined}>
+    <th className={r ? 'r' : undefined} aria-sort={k === sort ? 'ascending' : undefined} title={HINT[label]}>
       {k ? (
         <button onClick={() => onSort(k)}>
           {label}
           <SortIcon on={k === sort} />
         </button>
       ) : (
-        label
+        <span className="hint">{label}</span>
       )}
     </th>
   );
@@ -109,9 +141,7 @@ export function CaseTable({
                   <span className={`arrow ${c.direction}`}>{ARROW[c.direction]}</span> {c.metric}
                 </td>
                 <td className={`r num ${c.direction}`}>{pct(c.relative_effect)}</td>
-                <td className="m strong" title={c.segment}>
-                  {named ? c.segment : <span className="dim2">—</span>}
-                </td>
+                <td>{named ? <Segment label={c.segment} max={2} /> : <span className="dim2">—</span>}</td>
                 <td>
                   <span className={KIND_BADGE[c.verdict_kind]}>{KIND_LABEL[c.verdict_kind]}</span>
                 </td>
@@ -123,7 +153,9 @@ export function CaseTable({
                     <i className={publishable ? '' : 'low'} style={{ width: `${c.confidence * 100}%` }} />
                   </span>
                 </td>
-                <td className={`r num ${c.impact_json.revenue < 0 ? 'fall' : 'rise'}`}>{money(c.impact_json.revenue)}</td>
+                <td className={`r num ${c.impact_json.units < 0 ? 'fall' : 'rise'}`} title={impactHint(c)}>
+                  {impact(c.impact_json)}
+                </td>
                 <td className="m r">{clearedOf(c.candidates)}</td>
                 <td className="m r" style={{ color: c.coverage.length ? 'var(--warn)' : 'var(--tx3)' }}>
                   {c.coverage.length}

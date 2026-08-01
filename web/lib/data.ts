@@ -9,9 +9,12 @@ export const P_THRESHOLD = 0.01;
 
 export const KINDS: VerdictKind[] = ['localized', 'unlocalized', 'undecomposed', 'no_data'];
 
-export const flatten = (s: Step, out: Step[] = []): Step[] => {
-  out.push(s);
-  s.children?.forEach(c => flatten(c, out));
+/** Depth-first, carrying nesting level. The timeline lays every span against one clock and so
+ *  has no structure of its own to indent by; without the level recorded here, a flat list of
+ *  forty spans loses the containment the tree makes obvious. */
+export const flatten = (s: Step, out: Step[] = [], depth = 0): Step[] => {
+  out.push({ ...s, depth });
+  s.children?.forEach(c => flatten(c, out, depth + 1));
   return out;
 };
 
@@ -21,6 +24,9 @@ export interface Kpi {
   byKind: Record<VerdictKind, number>;
   meanConfidence: number;
   revenueAtRisk: number;
+  /** Cases whose impact could not be converted to revenue. Reported alongside the total,
+   *  because a sum that silently excludes them is a floor presented as a figure. */
+  unpriced: number;
   cellsTested: number;
   coverageGaps: number;
   llmVerified: number;
@@ -40,7 +46,10 @@ export function kpiOf(cases: Case[], spans: number): Kpi {
     meanConfidence: cases.length ? cases.reduce((s, c) => s + c.confidence, 0) / cases.length : 0,
     // Losses only. Netting a recovered segment against a broken one would report a quiet
     // hour for a night in which one thing broke and another improved.
-    revenueAtRisk: cases.reduce((s, c) => s + Math.min(0, c.impact_json.revenue), 0),
+    // `Math.min(0, null)` is 0, so an unpriced case used to vanish into the total without
+    // trace. They are excluded deliberately and counted instead.
+    revenueAtRisk: cases.reduce((s, c) => (c.impact_json.revenue != null ? s + Math.min(0, c.impact_json.revenue) : s), 0),
+    unpriced: cases.filter(c => c.impact_json.revenue == null).length,
     cellsTested: cases[0]?.cells_tested ?? 0,
     coverageGaps: cases.reduce((s, c) => s + c.coverage.length, 0),
     llmVerified: cases.filter(c => c.narrative_source === 'llm' && c.narrative_verified).length,

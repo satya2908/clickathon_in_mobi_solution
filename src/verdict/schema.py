@@ -436,6 +436,7 @@ ORDER BY (case_id, status, candidate)""",
   result      String,
   sql         String,
   duration_ms UInt32,
+  offset_ms   UInt32,
   span_id     String
 )
 ENGINE = MergeTree
@@ -506,6 +507,13 @@ def migration_statements() -> list[Statement]:
         Statement(
             "migrate_coverage_resolvable_effect",
             "ALTER TABLE coverage_ledger ADD COLUMN IF NOT EXISTS resolvable_effect Float64 DEFAULT -1",
+        ),
+        # AFTER duration_ms so the column order matches the DDL: inserts are positional, and a
+        # column appended at the end here but declared mid-table there would put offsets into
+        # span_id on any instance that took the migration path.
+        Statement(
+            "migrate_steps_offset_ms",
+            "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS offset_ms UInt32 DEFAULT 0 AFTER duration_ms",
         ),
         *(
             Statement(f"migrate_cases_{name.split()[0]}", f"ALTER TABLE cases ADD COLUMN IF NOT EXISTS {name}")

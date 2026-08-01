@@ -435,3 +435,103 @@ html { scrollbar-color: var(--scroll) transparent; }
 .vai-x:hover { background: var(--panel3); color: var(--tx); }
 
 .vai-panel iframe { flex: 1 1 auto; width: 100%; border: 0; display: block; background: var(--bg); }
+
+/* ---------------------------------------------------------------- segment pills
+
+   A dimension recedes, its value carries the weight, and the intersection is a gap rather
+   than the word AND. At table density that is the difference between reading a row and
+   parsing one. */
+
+.seg-pills { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; min-width: 0; }
+
+.seg-pill {
+  display: inline-flex; align-items: stretch; min-width: 0;
+  border: 1px solid var(--line); border-radius: 5px; overflow: hidden;
+  background: var(--panel); line-height: 1.55;
+}
+.seg-k {
+  padding: 0 5px; background: var(--panel2); color: var(--tx3);
+  font: 400 10.5px/1.55 var(--mono, ui-monospace, monospace);
+  border-right: 1px solid var(--line); white-space: nowrap;
+}
+.seg-v {
+  padding: 0 6px; color: var(--tx);
+  font: 500 11px/1.55 var(--mono, ui-monospace, monospace);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Between pills: the intersection, stated once in the layout instead of once per row. */
+.seg-pill + .seg-pill::before {
+  content: '∩'; align-self: center; margin: 0 4px 0 -1px;
+  color: var(--tx3); font-size: 10px;
+}
+.seg-more { color: var(--tx3); font-size: 10px; }
+.seg-all { color: var(--tx3); font-style: italic; font-size: 11.5px; }
+
+/* ---------------------------------------------------------------- column hints
+
+   Every heading in this table is a term of art. A dotted underline marks the ones that
+   explain themselves on hover, so a reader knows the explanation exists. */
+
+.tbl th .hint { border-bottom: 1px dotted var(--line2); cursor: help; }
+.tbl th button .hint { border-bottom: 0; }
+.tbl th button { border-bottom: 1px dotted var(--line2); }
+
+/* ---------------------------------------------------------------- priority chips */
+
+.pchip .dot {
+  width: 7px; height: 7px; border-radius: 2px; display: inline-block; flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------- timeline
+
+   The same spans as the tree, laid against one clock. Bars are positioned by measured start
+   offset, so the gaps between them are real: time the run spent somewhere no child accounts
+   for. A derived layout would close those up and claim the run was busy throughout. */
+
+.vtoggle { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.vtoggle button {
+  padding: 2px 8px; background: transparent; border: 0; cursor: pointer;
+  color: var(--tx3); font: 500 10.5px/1.6 inherit; letter-spacing: .02em; text-transform: none;
+}
+.vtoggle button + button { border-left: 1px solid var(--line); }
+.vtoggle button.on { background: var(--panel2); color: var(--tx); }
+.vtoggle button:hover:not(.on) { color: var(--tx2); }
+
+.wf { padding: 4px 0 8px; }
+
+.wf-axis {
+  position: relative; height: 16px; margin: 0 62px 4px 190px;
+  border-bottom: 1px solid var(--line);
+}
+.wf-tick {
+  position: absolute; top: 0; transform: translateX(-50%);
+  color: var(--tx3); font: 400 9.5px/1.5 var(--mono, ui-monospace, monospace);
+}
+/* The first tick is always 0 and would hang off the left edge. */
+.wf-tick:first-child { transform: none; }
+
+.wf-rows { display: flex; flex-direction: column; }
+
+.wf-row {
+  display: grid; grid-template-columns: 190px 1fr 62px; align-items: center;
+  gap: 0; padding: 1px 0; background: transparent; border: 0; cursor: pointer;
+  text-align: left; width: 100%; border-radius: 3px;
+}
+.wf-row:hover { background: var(--panel2); }
+.wf-row.on { background: var(--sel, var(--panel2)); box-shadow: inset 2px 0 0 var(--acc); }
+
+.wf-name {
+  display: flex; align-items: center; gap: 5px; min-width: 0; padding-right: 8px;
+  color: var(--tx2); font: 400 11px/1.7 var(--mono, ui-monospace, monospace);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wf-row.on .wf-name { color: var(--tx); }
+.wf-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+
+.wf-track { position: relative; height: 12px; background: var(--panel2); border-radius: 2px; }
+.wf-bar { position: absolute; top: 2px; height: 8px; border-radius: 2px; min-width: 2px; }
+
+.wf-ms {
+  padding-left: 8px; text-align: right;
+  color: var(--tx3); font: 400 10px/1.7 var(--mono, ui-monospace, monospace);
+}

@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CloseIcon, LinkIcon } from './icons';
 import { TraceTree } from './TraceTree';
+import { Waterfall } from './Waterfall';
+import { Segment } from './Segment';
 import { flatten, PUBLISH_THRESHOLD } from '@/lib/data';
 import { traceUrl } from '@/lib/links';
-import { ARROW, clearedOf, KIND_BADGE, KIND_LABEL, metricValue, money, ms, pct } from '@/lib/format';
+import { ARROW, clearedOf, impact, KIND_BADGE, KIND_LABEL, metricValue, money, ms, pct } from '@/lib/format';
 import type { Candidate, Case, Step } from '@/lib/types';
 
 const STATUS_BADGE: Record<Candidate['status'], string> = {
@@ -136,6 +138,7 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
   // rather than span_id, which is empty whenever tracing is switched off.
   const [sel, setSel] = useState(() => (nodes.find(n => n.name.startsWith('localize:')) ?? nodes[0])?.step_id ?? '');
   const [method, setMethod] = useState(false);
+  const [view, setView] = useState<'tree' | 'timeline'>('tree');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -150,7 +153,7 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
 
   const node = nodes.find(n => n.step_id === sel) ?? nodes[0] ?? null;
   const accused = c.candidates.find(x => x.status === 'accused');
-  const hyperdx = traceUrl(c.trace_id);
+  const hyperdx = traceUrl(c.trace_id, c.detected_at);
   const unscored = c.confidence_json.filter(x => !x.scored).length;
   const publishable = c.confidence >= PUBLISH_THRESHOLD;
   const gateMark = { pass: '✓', fail: '✗', unknown: '–' } as const;
@@ -169,7 +172,7 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
                 <span className="dim2" style={{ fontWeight: 400 }}>
                   ·
                 </span>
-                <span className="mono">{c.segment}</span>
+                <Segment label={c.segment} />
                 <span className={KIND_BADGE[c.verdict_kind]}>{KIND_LABEL[c.verdict_kind]}</span>
                 {c.recurrence_of && <span className="badge w">recurrence</span>}
               </h2>
@@ -178,9 +181,9 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
                   <span className="k">Effect</span>
                   <span className="v">{pct(c.relative_effect)}</span>
                 </span>
-                <span className={`pill ${c.impact_json.revenue < 0 ? 'd' : 'g'}`}>
+                <span className={`pill ${c.impact_json.units < 0 ? 'd' : 'g'}`}>
                   <span className="k">Impact</span>
-                  <span className="v">{money(c.impact_json.revenue)}</span>
+                  <span className="v">{impact(c.impact_json)}</span>
                 </span>
                 <span className={`pill${publishable ? '' : ' w'}`}>
                   <span className="k">Confidence</span>
@@ -219,19 +222,49 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
             <div className="tcol">
               <div className="colhd">
                 Trace
-                <span className="sp mono" style={{ letterSpacing: 0, textTransform: 'none' }}>
+                {/* Two readings of one set of spans. The tree answers what contains what; the
+                    timeline answers where the time went, which a nested list cannot show
+                    because it gives a 2ms stage and a 2s stage the same height. */}
+                <span className="vtoggle sp">
+                  <button
+                    className={view === 'tree' ? 'on' : ''}
+                    onClick={() => setView('tree')}
+                    title="Nesting: which stage ran inside which"
+                  >
+                    Tree
+                  </button>
+                  <button
+                    className={view === 'timeline' ? 'on' : ''}
+                    onClick={() => setView('timeline')}
+                    title="Timing: every span against one clock, positioned by when it started"
+                  >
+                    Timeline
+                  </button>
+                </span>
+                <span className="mono" style={{ letterSpacing: 0, textTransform: 'none', marginLeft: 8 }}>
                   {ms(root.duration_ms)}
                 </span>
               </div>
               <div className="scroll">
-                <TraceTree
-                  root={root}
-                  selected={sel}
-                  onSelect={(s: Step) => {
-                    setSel(s.step_id);
-                    setMethod(false);
-                  }}
-                />
+                {view === 'tree' ? (
+                  <TraceTree
+                    root={root}
+                    selected={sel}
+                    onSelect={(s: Step) => {
+                      setSel(s.step_id);
+                      setMethod(false);
+                    }}
+                  />
+                ) : (
+                  <Waterfall
+                    nodes={nodes}
+                    selected={sel}
+                    onSelect={(s: Step) => {
+                      setSel(s.step_id);
+                      setMethod(false);
+                    }}
+                  />
+                )}
               </div>
               <div className="kinds">
                 <span>
@@ -468,11 +501,23 @@ export function CasePanel({ c, onClose }: { c: Case; onClose: () => void }) {
                     </tr>
                     <tr>
                       <td className="m dim2">revenue</td>
-                      <td className="m strong">{money(c.impact_json.revenue)}</td>
+                      <td className="m strong">
+                        {c.impact_json.revenue != null ? (
+                          money(c.impact_json.revenue)
+                        ) : (
+                          <span className="dim2">not priced &mdash; {c.metric} is a count</span>
+                        )}
+                      </td>
                     </tr>
                     <tr>
                       <td className="m dim2">basis</td>
-                      <td title={c.impact_json.basis}>{c.impact_json.basis}</td>
+                      <td title={c.impact_json.basis.join(' -> ')}>
+                        {c.impact_json.basis.length ? (
+                          c.impact_json.basis.join(' \u2192 ')
+                        ) : (
+                          <span className="dim2">measured directly</span>
+                        )}
+                      </td>
                     </tr>
                     <tr>
                       <td className="m dim2">direct</td>

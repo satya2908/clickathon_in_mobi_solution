@@ -89,7 +89,13 @@ export interface Step {
   result: string;
   sql?: string;
   duration_ms: number;
+  /** Milliseconds from the start of the run to the start of this step. Gives the waterfall a
+   *  position for each bar; without it the layout could only be inferred from sibling order,
+   *  which assumes the run never waited on anything. */
+  offset_ms: number;
   children?: Step[];
+  /** Nesting level, filled in when the tree is flattened for the timeline. */
+  depth?: number;
 }
 
 /** One row of `cases`, plus the joined evidence a reviewer needs on the page. */
@@ -113,7 +119,12 @@ export interface Case {
   confidence: number;
   confidence_json: Component[];
   gates_json: Record<'sufficiency' | 'minimality' | 'maximality' | 'holdout', CheckState>;
-  impact_json: { units: number; unit: string; revenue: number; direct: boolean; basis: string };
+  /** `revenue` is null whenever the metric is a count rather than money and no conversion to
+   *  revenue was defensible. That is not the same as zero, and the UI must not round it to
+   *  zero: an unquantified impact is unknown, and a case ranked as harmless because nobody
+   *  priced it is the exact failure this system exists to avoid. `units` always carries the
+   *  measured move, in whatever `unit` the metric counts. */
+  impact_json: { units: number; unit: string; revenue: number | null; direct: boolean; basis: string[] };
   narrative: string;
   narrative_source: NarrativeSource;
   /** `narrative_rejected`: figures the model wrote that were not in the evidence bundle.

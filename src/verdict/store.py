@@ -106,6 +106,7 @@ STEP_COLUMNS = (
     "result",
     "sql",
     "duration_ms",
+    "offset_ms",
     "span_id",
 )
 
@@ -450,6 +451,7 @@ class Case:
                 step["result"],
                 step["sql"],
                 int(step["duration_ms"]),
+                int(step.get("offset_ms", 0)),
                 step["span_id"],
             ]
             for step in self.steps

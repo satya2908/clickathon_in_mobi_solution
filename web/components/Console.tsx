@@ -11,13 +11,24 @@ import { KIND_FILL, KIND_LABEL, money, priority } from '@/lib/format';
 import type { Series } from '@/lib/queries';
 import type { Case, Run, VerdictKind } from '@/lib/types';
 
+/** Unpriced cases sort last within their bucket rather than as zero. A case nobody could
+ *  convert to revenue is of unknown size, and sorting it among the genuinely small ones
+ *  hides it exactly where a reader has stopped looking. */
+const byRevenue = (a: Case, b: Case) => {
+  const x = a.impact_json.revenue;
+  const y = b.impact_json.revenue;
+  if (x == null && y == null) return b.confidence - a.confidence;
+  if (x == null) return 1;
+  if (y == null) return -1;
+  return x - y;
+};
+
 const SORTERS: Record<Sort, (a: Case, b: Case) => number> = {
   priority: (a, b) =>
-    priority(a.impact_json.revenue, a.confidence) - priority(b.impact_json.revenue, b.confidence) ||
-    a.impact_json.revenue - b.impact_json.revenue,
+    priority(a.impact_json.revenue, a.confidence) - priority(b.impact_json.revenue, b.confidence) || byRevenue(a, b),
   effect: (a, b) => Math.abs(b.relative_effect) - Math.abs(a.relative_effect),
   confidence: (a, b) => b.confidence - a.confidence,
-  impact: (a, b) => a.impact_json.revenue - b.impact_json.revenue,
+  impact: byRevenue,
 };
 
 interface Props {
@@ -50,8 +61,29 @@ function Empty({ runs }: { runs: Run[] }) {
   );
 }
 
+/** Priority is not a stored column. It is impact ranked by confidence, bucketed, so the
+ *  filter has to describe what the buckets mean -- "P0" is otherwise just a colour. */
+const PRIORITIES = [0, 1, 2, 3] as const;
+
+const PRI_HINT: Record<number, string> = {
+  0: 'Large impact and high confidence. Look at these first.',
+  1: 'Material impact, or a large one held back by a weaker verdict.',
+  2: 'Small but proven, or large and speculative.',
+  3: 'Marginal on both counts. Kept so the ledger is complete.',
+};
+
+const PRI_FILL = ['var(--err)', 'var(--warn)', 'var(--tx2)', 'var(--line2)'];
+
+const KIND_HINT: Record<VerdictKind, string> = {
+  localized: 'A segment was named and removing it returned the parent to its expected band.',
+  unlocalized: 'The movement is real but no segment explains it — the signature of a change upstream of the auction.',
+  undecomposed: 'A segment was named but failed its breadth checks. A lead, not a verdict.',
+  no_data: 'Too little traffic to decompose. Published so it is not silently dropped.',
+};
+
 export function Console({ run, runs, cases, series, spans, empty }: Props) {
   const [kind, setKind] = useState<VerdictKind | null>(null);
+  const [pri, setPri] = useState<number | null>(null);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort>('priority');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -86,12 +118,23 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
     }
   };
 
+  const byPri = useMemo(() => {
+    const counts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    for (const c of cases) counts[priority(c.impact_json.revenue, c.confidence)]++;
+    return counts;
+  }, [cases]);
+
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return cases
-      .filter(c => (!kind || c.verdict_kind === kind) && (!q || `${c.metric} ${c.segment}`.toLowerCase().includes(q)))
+      .filter(
+        c =>
+          (!kind || c.verdict_kind === kind) &&
+          (pri === null || priority(c.impact_json.revenue, c.confidence) === pri) &&
+          (!q || `${c.metric} ${c.segment}`.toLowerCase().includes(q)),
+      )
       .sort(SORTERS[sort]);
-  }, [cases, kind, query, sort]);
+  }, [cases, kind, pri, query, sort]);
 
   const openCase = openId ? cases.find(c => c.case_id === openId) : null;
   const window0 = cases[0];
@@ -123,10 +166,20 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
                   </span>
                 </div>
 
-                <div className="kpi">
+                <div
+                  className="kpi"
+                  title={
+                    kpi.unpriced
+                      ? `Losses only, never netted against recoveries. ${kpi.unpriced} of ${kpi.cases} cases measure a count that could not be converted to revenue and are excluded, so this is a floor.`
+                      : 'Losses only, never netted against recoveries: a quiet total would hide an hour in which one thing broke and another improved.'
+                  }
+                >
                   <span className="hd">Revenue at risk</span>
                   <span className="v fall">{money(kpi.revenueAtRisk)}</span>
-                  <span className="def">losses only · not netted</span>
+                  <span className="def">
+                    losses only · not netted
+                    {kpi.unpriced > 0 && <span style={{ color: 'var(--warn)' }}> · {kpi.unpriced} unpriced</span>}
+                  </span>
                 </div>
 
                 <div className="kpi">
@@ -147,16 +200,36 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
               {series.length > 0 && <MetricChart series={series} />}
 
               <div className="strip">
-                <div className="fchips" role="group" aria-label="Filter by verdict">
-                  <button className={`fchip${kind === null ? ' on' : ''}`} aria-pressed={kind === null} onClick={() => setKind(null)}>
+                <div className="fchips" role="group" aria-label="Filter by priority">
+                  <button
+                    className={`fchip${pri === null ? ' on' : ''}`}
+                    aria-pressed={pri === null}
+                    onClick={() => setPri(null)}
+                    title="Every priority"
+                  >
                     All <span className="n">{kpi.cases}</span>
                   </button>
+                  {PRIORITIES.filter(p => byPri[p] > 0).map(p => (
+                    <button
+                      key={p}
+                      className={`fchip pchip${pri === p ? ' on' : ''}`}
+                      aria-pressed={pri === p}
+                      onClick={() => setPri(pri === p ? null : p)}
+                      title={PRI_HINT[p]}
+                    >
+                      <span className="dot" style={{ background: PRI_FILL[p] }} />P{p} <span className="n">{byPri[p]}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="fchips" role="group" aria-label="Filter by verdict" style={{ marginLeft: 4 }}>
                   {KINDS.filter(k => kpi.byKind[k] > 0).map(k => (
                     <button
                       key={k}
                       className={`fchip${kind === k ? ' on' : ''}`}
                       aria-pressed={kind === k}
                       onClick={() => setKind(kind === k ? null : k)}
+                      title={KIND_HINT[k]}
                     >
                       <span className="sw" style={{ background: KIND_FILL[k] }} />
                       {KIND_LABEL[k]} <span className="n">{kpi.byKind[k]}</span>

@@ -91,6 +91,7 @@ interface StepRow {
   result: string;
   sql: string;
   duration_ms: number;
+  offset_ms: number;
   span_id: string;
 }
 
@@ -117,6 +118,7 @@ function buildTree(steps: StepRow[]): Step | null {
       result: s.result ?? '',
       sql: s.sql || undefined,
       duration_ms: num(s.duration_ms),
+      offset_ms: num(s.offset_ms),
     });
   }
 
@@ -143,7 +145,10 @@ function buildTree(steps: StepRow[]): Step | null {
     what: `${roots.length} top-level stages`,
     why: 'This run stored its stages as separate roots, so they are grouped here for reading.',
     result: '',
-    duration_ms: roots.reduce((s, r) => s + r.duration_ms, 0),
+    // The fragments share no clock, so the synthetic parent spans from the earliest start to
+    // the latest finish rather than summing durations, which would double-count any overlap.
+    duration_ms: Math.max(...roots.map(r => r.offset_ms + r.duration_ms)) - Math.min(...roots.map(r => r.offset_ms)),
+    offset_ms: Math.min(...roots.map(r => r.offset_ms)),
     children: roots,
   };
 }
@@ -154,7 +159,7 @@ async function getTraces(caseIds: string[]): Promise<Map<string, Step>> {
 
   const raw = await rows<StepRow>(
     `SELECT case_id, step_id, parent_id, ordinal, name, kind, what, why, result, sql,
-            duration_ms, span_id
+            duration_ms, offset_ms, span_id
      FROM case_steps WHERE case_id IN {ids:Array(String)} ORDER BY case_id, ordinal`,
     { ids: caseIds },
   );
@@ -339,13 +344,23 @@ function readComponents(raw: string): Component[] {
 }
 
 function readImpact(raw: string): Case['impact_json'] {
-  const p = parse<{ units?: number; unit?: string; revenue?: number; direct?: boolean; basis?: string[] | string }>(raw, {});
+  const p = parse<{
+    units?: number;
+    unit?: string;
+    revenue?: number | null;
+    direct?: boolean;
+    basis?: string[] | string;
+  }>(raw, {});
   return {
     units: num(p.units),
     unit: p.unit ?? '',
-    revenue: num(p.revenue),
+    // Deliberately not `num()`, which returns 0 for null. The engine writes null whenever a
+    // count metric could not be converted to revenue, and flattening that to zero told the
+    // console every such case was worth nothing -- which put the entire board in the lowest
+    // priority bucket and reported a revenue-at-risk total that quietly excluded them.
+    revenue: typeof p.revenue === 'number' && Number.isFinite(p.revenue) ? p.revenue : null,
     direct: Boolean(p.direct),
-    basis: Array.isArray(p.basis) ? p.basis.join('; ') : (p.basis ?? ''),
+    basis: Array.isArray(p.basis) ? p.basis : p.basis ? [p.basis] : [],
   };
 }
 

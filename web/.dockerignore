@@ -1,0 +1,9 @@
+node_modules
+.next
+*.tsbuildinfo
+.DS_Store
+# Never bake credentials into a layer. The compose file supplies them at run time, and an
+# image that carries a working ClickHouse password is one `docker save` away from leaking it.
+.env
+.env.*
+README.md

@@ -110,12 +110,31 @@ const EXONERATED: Candidate['status'][] = ['cleared', 'immaterial', 'wrong_direc
 export const clearedOf = (candidates: Candidate[]) =>
   `${candidates.filter(c => EXONERATED.includes(c.status)).length} / ${candidates.length}`;
 
-/** Priority is not a stored column: it is impact ranked by confidence, so a big
- *  number nobody can stand behind does not outrank a proven small one. */
-export const priority = (revenue: number, confidence: number): 0 | 1 | 2 | 3 => {
+/** Priority is not a stored column: it is impact ranked by confidence, so a big number nobody
+ *  can stand behind does not outrank a proven small one.
+ *
+ *  Revenue is null for count metrics that could not be priced. Treating that as zero -- which
+ *  is what `Math.abs(null)` quietly does -- ranked every unpriced case as harmless and put
+ *  the whole board in the bottom bucket. Unknown is not zero, so those rank on confidence
+ *  alone, and are capped below the top bucket: a finding nobody has sized should not outrank
+ *  one that has been measured in money. */
+export const priority = (revenue: number | null, confidence: number): 0 | 1 | 2 | 3 => {
+  if (revenue == null || !Number.isFinite(revenue)) {
+    if (confidence >= 0.75) return 1;
+    if (confidence >= PUBLISHABLE) return 2;
+    return 3;
+  }
   const weighted = Math.abs(revenue) * confidence;
   if (weighted >= 12_000) return 0;
   if (weighted >= 3_000) return 1;
   if (weighted >= 700) return 2;
   return 3;
 };
+
+/** Duplicated from lib/data rather than imported, to keep this module free of that cycle. */
+const PUBLISHABLE = 0.5;
+
+/** Impact, in whatever terms it was actually established. Money when the case was priced;
+ *  otherwise the raw move with its unit, so the row says "20.4k fills" rather than "$0.00". */
+export const impact = (i: { units: number; unit: string; revenue: number | null }): string =>
+  i.revenue != null && Number.isFinite(i.revenue) ? money(i.revenue) : `${count(Math.round(i.units))} ${i.unit}`;

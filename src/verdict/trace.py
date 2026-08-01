@@ -41,6 +41,11 @@ class Step:
     result: str = ""
     sql: str = ""
     duration_ms: int = 0
+    # Milliseconds from the start of the run to the start of this step. Duration alone is not
+    # enough to draw a waterfall: it gives every bar a width but no position, and placing them
+    # by summing earlier siblings silently assumes the run had no gaps in it. Measuring the
+    # offset instead means a stage that waited on something shows the wait.
+    offset_ms: int = 0
     span_id: str = ""
     attributes: dict[str, Any] = field(default_factory=dict)
     # 32 hex characters, distinct from the 16 of span_id. Kept off as_row because case_steps has
@@ -110,6 +115,10 @@ class Tracer:
         self.steps: list[Step] = []
         self._stack: list[str] = []
         self._ordinal = 0
+        # Fixed for the life of the tracer, and deliberately not cleared by reset(): a case
+        # carries the run-level steps that preceded it, so offsets have to share one origin
+        # across every case in the run or the prefix would restart at zero in each of them.
+        self._origin = time.perf_counter()
         self._otel_tracer: Any | None = None
         self._provider: Any | None = None
         if cfg.enabled:
@@ -158,6 +167,7 @@ class Tracer:
         self.steps.append(step)
         self._stack.append(step.step_id)
         started = step.started = time.perf_counter()
+        step.offset_ms = max(0, int((started - self._origin) * 1000))
 
         if self._otel_tracer is None:
             try:
