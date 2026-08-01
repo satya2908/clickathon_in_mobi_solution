@@ -1,0 +1,81 @@
+# One-shot schema creation and dataset load.
+#
+# Run once against a fresh service, before the CronJob is allowed to start. The load verifies
+# itself: rollup totals must reproduce the raw facts exactly and every glossary metric must
+# agree computed both ways, so a failed Job here is a real signal rather than a flake to retry.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verdict-load
+  labels:
+    app.kubernetes.io/name: verdict
+    app.kubernetes.io/component: loader
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: verdict
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      initContainers:
+        - name: apply-schema
+          image: verdict
+          args: ["schema", "apply"]
+          envFrom:
+            - configMapRef:
+                name: verdict-env
+                optional: true
+            - secretRef:
+                name: verdict-secrets
+          env:
+            - name: VERDICT_CONFIG
+              value: /etc/verdict/verdict.yaml
+            - name: VERDICT_METRICS
+              value: /etc/verdict/metrics.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/verdict
+              readOnly: true
+      containers:
+        - name: load
+          image: verdict
+          args: ["load"]
+          envFrom:
+            - configMapRef:
+                name: verdict-env
+                optional: true
+            - secretRef:
+                name: verdict-secrets
+          env:
+            - name: VERDICT_CONFIG
+              value: /etc/verdict/verdict.yaml
+            - name: VERDICT_METRICS
+              value: /etc/verdict/metrics.yaml
+            - name: VERDICT_DATA_DIR
+              value: /data
+          volumeMounts:
+            - name: config
+              mountPath: /etc/verdict
+              readOnly: true
+            - name: data
+              mountPath: /data
+              readOnly: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 4Gi
+      volumes:
+        - name: config
+          configMap:
+            name: verdict-config
+        - name: data
+          # Swap for a PVC, an S3 CSI volume, or an initContainer that downloads the dataset.
+          emptyDir: {}
