@@ -175,6 +175,10 @@ def clamp_dispersion(phi: float, floor: float = 1.0, ceiling: float = 50.0) -> f
 
 @dataclass(frozen=True)
 class TestResult:
+    # "Test" here means statistical hypothesis test, but the name matches pytest's collection
+    # pattern, so importing it into a test module makes pytest try to collect it as a suite.
+    __test__ = False
+
     z: float
     p_value: float
     observed: float
