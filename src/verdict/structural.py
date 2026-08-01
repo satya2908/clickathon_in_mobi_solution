@@ -43,6 +43,7 @@ from .config import DetectionConfig
 from .detect import CoverageGap, DetectionResult, Finding
 from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window
+from .schema import LATTICE_DEPTH
 from .stats import TestResult, mad, median, normal_sf, required_denominator
 from .trace import Tracer
 
@@ -183,6 +184,17 @@ def detect_structural(
             "structural scan skipped for %s: window shorter than %d day(s)",
             metric_name,
             cfg.structural_min_window_days,
+        )
+        return result
+
+    # The whole method is a two-way grid, so a grain that stores only one-way cells has nothing
+    # for it to read. Returning empty here is honest; scanning anyway would build grids of zeros
+    # and report every cell as a structural anomaly against a background of nothing.
+    if LATTICE_DEPTH.get(window.grain, 2) < 2:
+        log.debug(
+            "structural scan skipped for %s: grain %s stores one-way cells only",
+            metric_name,
+            window.grain,
         )
         return result
 

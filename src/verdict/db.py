@@ -216,6 +216,22 @@ class ClickHouse:
         with self._span(name, sql):
             self._run(sql, lambda: self.client.command(sql), name=name)
 
+    def try_command(self, sql: str, *, name: str = "command") -> bool:
+        """Run a statement whose failure is tolerable, reporting success instead of raising.
+
+        For housekeeping that improves the state of the database without being load-bearing:
+        OPTIMIZE is the case that matters here. A SummingMergeTree never guarantees collapsed
+        parts, and every read in this system sums explicitly rather than assuming one row per
+        key, so a merge that could not be scheduled costs some disk and some scan time and
+        changes no answer. Aborting a nine-million-row load over it would be the larger error.
+        """
+        try:
+            self.command(sql, name=name)
+            return True
+        except QueryError as exc:
+            log.warning("%s did not run: %s", name, exc)
+            return False
+
     def insert(
         self,
         table: str,

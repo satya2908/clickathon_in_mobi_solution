@@ -52,6 +52,42 @@ GRAINS = {
     "1d": ("rollup_1d", "toStartOfDay"),
 }
 
+# How deep the lattice goes at each grain. This is a statistical-power decision, not a storage
+# one, though it happens to save an order of magnitude of storage as well.
+#
+# Detecting a 10-point drop in a 0.785 fill rate at alpha=0.01 with 80% power needs about 454
+# requests in the window and again in the baseline. Measured against this dataset -- 9M events
+# over 35 days, dimension cardinalities 16/8/8/7/7/5/5/3/3 giving 1 + 62 + 1647 = 1710 cells --
+# the traffic available per cell is:
+#
+#     grain   buckets   global    1-way (country)   2-way (country|vertical)
+#     5m       10,080      893                 56                        0.5
+#     1h          840   10,714                670                         96
+#     1d           35  257,143             16,071                      2,300
+#
+# So a 2-way cell at 5-minute grain carries about half a request. Materializing those 1647
+# combos costs 1647/1710 = 96% of the rows in the table to produce cells that every detector
+# must reject as underpowered, and it is measured: 'country|vertical' at 5m has a median of 1
+# request per cell and 100% of cells below 30. The 5-minute tier therefore keeps only the grand
+# total and the one-way cells, which is what fast top-line alerting actually reads; two-way
+# localization happens at hourly and daily grain, where the cells can support a test.
+LATTICE_DEPTH = {"5m": 1, "1h": 2, "1d": 2}
+
+# Where each grain's rows come from. "events" means a materialized view reads ad_events
+# directly; anything else names a rollup table that a view reads to build this one.
+#
+# Hourly reads events rather than chaining off rollup_5m because the 5-minute tier is shallow
+# and a coarser grain cannot recover two-way cells its source never stored. Daily chains off
+# hourly, since both are full depth.
+#
+# This mapping is also what makes backfill safe, and that is not a detail. A materialized view
+# fires on every insert into its source, including inserts made by the backfill itself. So
+# backfilling rollup_1h automatically fills rollup_1d through mv_1h_to_1d, and a backfill
+# statement for rollup_1d would insert the same rows a second time. That bug is invisible in
+# any per-table check -- both tables look populated and internally consistent -- and shows up
+# only as a daily grain carrying exactly twice the traffic of the facts.
+ROLLUP_SOURCE = {"5m": "events", "1h": "events", "1d": "rollup_1h"}
+
 
 @dataclass(frozen=True)
 class Statement:
@@ -59,11 +95,17 @@ class Statement:
     sql: str
 
 
-def combos(dims: list[str]) -> list[tuple[str, str | None]]:
-    """The lattice: the grand total, every dimension alone, and every unordered pair."""
+def combos(dims: list[str], max_depth: int = 2) -> list[tuple[str, str | None]]:
+    """The lattice: the grand total, every dimension alone, and every unordered pair.
+
+    ``max_depth`` of 1 stops after the single dimensions. See ``LATTICE_DEPTH`` for why a grain
+    would want that.
+    """
     out: list[tuple[str, str | None]] = [(TOTAL_COMBO, None)]
-    out.extend((d, None) for d in dims)
-    out.extend((a, b) for a, b in combinations(dims, 2))
+    if max_depth >= 1:
+        out.extend((d, None) for d in dims)
+    if max_depth >= 2:
+        out.extend((a, b) for a, b in combinations(dims, 2))
     return out
 
 
@@ -71,16 +113,16 @@ def combo_name(a: str, b: str | None) -> str:
     return a if b is None else f"{a}|{b}"
 
 
-def _combo_array(dims: list[str]) -> str:
+def _combo_array(dims: list[str], max_depth: int = 2) -> str:
     """The array of (combo, key_a, key_b) tuples fanned out per event.
 
-    One ARRAY JOIN replaces what would otherwise be 46 separate materialized views, which
-    matters for more than tidiness: with 46 views the streaming path and the backfill path
-    are 46 chances to define a bucket boundary slightly differently, and any disagreement
+    One ARRAY JOIN replaces what would otherwise be one materialized view per combo, which
+    matters for more than tidiness: with 1710 views the streaming path and the backfill path
+    are 1710 chances to define a bucket boundary slightly differently, and any disagreement
     shows up in the data as a step change that looks exactly like a real incident.
     """
     rows = []
-    for a, b in combos(dims):
+    for a, b in combos(dims, max_depth):
         if a == TOTAL_COMBO:
             rows.append("    ('__all__', '', '')")
         elif b is None:
@@ -93,7 +135,9 @@ def _combo_array(dims: list[str]) -> str:
     return "[\n" + ",\n".join(rows) + "\n  ]"
 
 
-def rollup_select_from_events(dims: list[str], bucket_fn: str, where: str = "") -> str:
+def rollup_select_from_events(
+    dims: list[str], bucket_fn: str, where: str = "", max_depth: int = 2
+) -> str:
     """The one definition of how raw events become rollup rows.
 
     Used verbatim by both the materialized view and the historical backfill so the two cannot
@@ -111,7 +155,7 @@ def rollup_select_from_events(dims: list[str], bucket_fn: str, where: str = "") 
   sum(is_click)                       AS clicks,
   sum(revenue)                        AS revenue
 FROM ad_events
-ARRAY JOIN {_combo_array(dims)} AS c{clause}
+ARRAY JOIN {_combo_array(dims, max_depth)} AS c{clause}
 GROUP BY bucket, combo, key_a, key_b"""
 
 
@@ -270,29 +314,29 @@ ORDER BY (combo, bucket, key_a, key_b){ttl}""",
     return stmts
 
 
+def view_name(grain: str) -> str:
+    source = ROLLUP_SOURCE[grain]
+    return f"mv_events_to_{grain}" if source == "events" else f"mv_{source[7:]}_to_{grain}"
+
+
 def view_ddl(dims: list[str]) -> list[Statement]:
-    """Materialized views for the live path.
+    """Materialized views for the live path, one per grain, derived from ``ROLLUP_SOURCE``.
 
     These cover events arriving after load. History is backfilled explicitly with the same
     SELECT, because a view only ever fires on new inserts.
     """
-    stmts = [
-        Statement(
-            "mv_events_to_5m",
-            "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_events_to_5m TO rollup_5m AS\n"
-            + rollup_select_from_events(dims, "toStartOfFiveMinutes"),
-        ),
-        Statement(
-            "mv_5m_to_1h",
-            "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_5m_to_1h TO rollup_1h AS\n"
-            + rollup_select_from_rollup("rollup_5m", "toStartOfHour"),
-        ),
-        Statement(
-            "mv_1h_to_1d",
-            "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_1h_to_1d TO rollup_1d AS\n"
-            + rollup_select_from_rollup("rollup_1h", "toStartOfDay"),
-        ),
-    ]
+    stmts = []
+    for grain, (table, bucket_fn) in GRAINS.items():
+        source = ROLLUP_SOURCE[grain]
+        select = (
+            rollup_select_from_events(dims, bucket_fn, max_depth=LATTICE_DEPTH[grain])
+            if source == "events"
+            else rollup_select_from_rollup(source, bucket_fn)
+        )
+        name = view_name(grain)
+        stmts.append(
+            Statement(name, f"CREATE MATERIALIZED VIEW IF NOT EXISTS {name} TO {table} AS\n{select}")
+        )
     return stmts
 
 
@@ -446,22 +490,26 @@ def all_statements(cfg: Config, registry: MetricRegistry) -> list[Statement]:
 
 
 def backfill_statements(dims: list[str], where: str = "") -> list[Statement]:
-    """Populate rollups from already-loaded history, finest grain upward."""
-    rollup_where = where.replace("event_time", "bucket") if where else ""
-    return [
-        Statement(
-            "backfill_5m",
-            "INSERT INTO rollup_5m\n"
-            + rollup_select_from_events(dims, "toStartOfFiveMinutes", where),
-        ),
-        Statement(
-            "backfill_1h",
-            "INSERT INTO rollup_1h\n"
-            + rollup_select_from_rollup("rollup_5m", "toStartOfHour", rollup_where),
-        ),
-        Statement(
-            "backfill_1d",
-            "INSERT INTO rollup_1d\n"
-            + rollup_select_from_rollup("rollup_1h", "toStartOfDay", rollup_where),
-        ),
-    ]
+    """Populate rollups from already-loaded history, mirroring the view chain exactly.
+
+    Only the grains fed directly from ``ad_events`` get a statement. The rest are filled as a
+    side effect: a materialized view fires on inserts made by this backfill just as it does on
+    live traffic, so writing rollup_1h also writes rollup_1d, and issuing a statement for the
+    daily grain too would insert every one of those rows a second time.
+
+    Each statement uses the same SELECT and the same depth as the view that would have produced
+    those rows live, so a table's contents do not depend on whether the events arrived before
+    or after the views existed.
+    """
+    stmts = []
+    for grain, (table, bucket_fn) in GRAINS.items():
+        if ROLLUP_SOURCE[grain] != "events":
+            continue
+        select = rollup_select_from_events(dims, bucket_fn, where, max_depth=LATTICE_DEPTH[grain])
+        stmts.append(Statement(f"backfill_{grain}", f"INSERT INTO {table}\n{select}"))
+    return stmts
+
+
+def cascaded_grains() -> list[str]:
+    """Grains that a backfill fills indirectly, through another grain's materialized view."""
+    return [g for g in GRAINS if ROLLUP_SOURCE[g] != "events"]

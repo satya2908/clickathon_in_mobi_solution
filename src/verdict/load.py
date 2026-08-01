@@ -249,7 +249,19 @@ def backfill_rollups(ch: ClickHouse, registry: MetricRegistry, report: LoadRepor
         ch.command(stmt.sql, name=stmt.name)
 
     for table in ("rollup_5m", "rollup_1h", "rollup_1d"):
-        ch.command(f"OPTIMIZE TABLE {table} FINAL", name=f"optimize_{table}")
+        # Best-effort. Immediately after a bulk load the background merge pool is saturated and
+        # ClickHouse Cloud refuses new OPTIMIZE work with CANNOT_ASSIGN_OPTIMIZE. That is a
+        # scheduling state, not a data problem: the rows are present and correct either way,
+        # merges continue on their own, and every read sums rather than assuming one row per
+        # key. The row counts below are reported as-is so the log shows the pre-merge reality
+        # rather than implying a compaction that did not happen.
+        merged = ch.try_command(f"OPTIMIZE TABLE {table} FINAL", name=f"optimize_{table}")
+        if not merged:
+            report.warnings.append(
+                f"{table} was not compacted: the merge pool was busy. Row counts below are "
+                f"pre-merge and will fall as ClickHouse merges in the background. No total "
+                f"changes, because reads aggregate explicitly."
+            )
         report.rollup_rows[table] = int(
             ch.scalar(f"SELECT count() FROM {table}", name=f"count_{table}", default=0)
         )

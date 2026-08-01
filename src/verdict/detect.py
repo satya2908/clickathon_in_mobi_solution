@@ -31,7 +31,7 @@ from typing import Any
 from .config import DetectionConfig
 from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window
-from .schema import TOTAL_COMBO
+from .schema import LATTICE_DEPTH, TOTAL_COMBO
 from .stats import (
     Pooled,
     TestResult,
@@ -222,7 +222,7 @@ def detect_temporal(
     metric = registry.metric(metric_name)
     result = DetectionResult()
 
-    targets = combos if combos is not None else _lattice_combos(registry, metric)
+    targets = combos if combos is not None else _lattice_combos(registry, metric, window.grain)
     for combo in targets:
         result.extend(
             _detect_temporal_combo(reader, registry, cfg, metric, window, combo, tracer)
@@ -240,20 +240,26 @@ def detect_temporal(
     return result
 
 
-def _lattice_combos(registry: MetricRegistry, metric: Metric) -> list[str]:
-    """Combos this metric may legally be sliced by, total first.
+def _lattice_combos(registry: MetricRegistry, metric: Metric, grain: str = "1h") -> list[str]:
+    """Combos this metric may legally be sliced by at this grain, total first.
 
-    Combos containing a dimension the metric cannot legally use are omitted entirely rather
-    than tested and discarded, because the values in them are not merely noisy: their
-    denominator is a different population.
+    Two filters apply. Combos containing a dimension the metric cannot legally use are omitted
+    entirely rather than tested and discarded, because those values are not merely noisy --
+    their denominator is a different population. And combos deeper than the grain stores are
+    omitted because the rows do not exist; asking for them would return empty cells that look
+    like segments with no traffic rather than like a question the storage cannot answer.
     """
     legal = set(registry.valid_dimensions(metric))
+    depth = LATTICE_DEPTH.get(grain, 2)
+
     combos = [TOTAL_COMBO]
-    combos.extend(sorted(legal))
     ordered = sorted(legal)
-    for i, a in enumerate(ordered):
-        for b in ordered[i + 1 :]:
-            combos.append(f"{a}|{b}")
+    if depth >= 1:
+        combos.extend(ordered)
+    if depth >= 2:
+        for i, a in enumerate(ordered):
+            for b in ordered[i + 1 :]:
+                combos.append(f"{a}|{b}")
     return combos
 
 
