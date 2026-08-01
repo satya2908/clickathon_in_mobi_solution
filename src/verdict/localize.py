@@ -50,6 +50,23 @@ State = Literal["pass", "fail", "unknown"]
 # denominator of the sufficiency fraction is mostly rounding noise.
 _MIN_TESTABLE_DEVIATION = 1e-9
 
+# How far down the ranked list to keep testing when a candidate fails to reproduce. Each trial
+# costs two queries, and a window where the top three all fail the holdout is one where the
+# honest answer is that nothing reproduced rather than that the fourth choice is the culprit.
+_MAX_HOLDOUT_TRIALS = 3
+
+# Effects agreeing to a tenth of a percentage point are treated as the same effect when ranking.
+# The resolution is chosen against the reporting floor rather than against the data: nothing below
+# a five percent move is reported at all, so a gap two orders of magnitude beneath that carries no
+# information about which of two candidates is the better answer, and letting it decide means the
+# verdict turns on floating-point noise. Coarser than this would start merging genuinely different
+# explanations; finer leaves the ordering to chance.
+_TIE_RESOLUTION = 3
+
+
+def _bucket(value: float) -> float:
+    return round(value, _TIE_RESOLUTION)
+
 
 def parent_moved(
     metric: Metric,
@@ -150,6 +167,16 @@ class Candidate:
         if not self.expected_value:
             return 0.0
         return self.deviation / self.expected_value
+
+    @property
+    def coverage(self) -> float:
+        """How much traffic this segment accounts for, as a tie-break between equal explanations.
+
+        Requests rather than the metric's own denominator, so that the comparison means the same
+        thing for every metric and cannot be gamed by a segment that happens to sit deep in the
+        funnel where the denominator is small.
+        """
+        return float(self.observed.requests)
 
     @property
     def sufficiency(self) -> float:
@@ -664,12 +691,10 @@ class Localizer:
                 metric, candidate, history, self.cfg.maximality_threshold
             )
 
-        accused = self._choose(candidates, mode, direction)
-
-        if accused is not None and self.cfg.holdout_enabled:
-            accused.checks["holdout"] = holdout_check(
-                self.reader, metric, accused, window, self.detection.baseline_weeks
-            )
+        viable = self._choose(
+            candidates, mode, direction, metric.effect_threshold(self.detection.min_relative_effect)
+        )
+        accused = self._accuse(viable, mode, metric, window)
 
         if accused is not None:
             self._build_ledger(metric, accused, candidates, history)
@@ -743,9 +768,17 @@ class Localizer:
         return kept
 
     def _choose(
-        self, candidates: list[Candidate], mode: str, direction: str | None = None
-    ) -> Candidate | None:
-        """Pick the narrowest candidate that survives every test it was possible to run.
+        self,
+        candidates: list[Candidate],
+        mode: str,
+        direction: str | None = None,
+        effect_floor: float = 0.0,
+    ) -> list[Candidate]:
+        """Rank the candidates that survive every test it was possible to run, best first.
+
+        A list rather than a winner, because the holdout is too expensive to run on every
+        candidate and can only be run once there is an order to run it in. The caller walks this
+        list, tests as few as it must, and accuses the first that survives.
 
         Ordering is by sufficiency, then by depth descending. The tie-break matters: when a
         two-dimensional cell and the one-dimensional segment containing it explain the same
@@ -772,13 +805,36 @@ class Localizer:
             minim = candidate.check_state("minimality")
             maxim = candidate.check_state("maximality")
 
-            if mode == "structural_only" and direction in {"rise", "fall"}:
-                own = candidate.deviation
-                if (direction == "rise" and own <= 0) or (direction == "fall" and own >= 0):
-                    candidate.status = "wrong_direction"
+            if mode == "structural_only":
+                if direction in {"rise", "fall"}:
+                    own = candidate.deviation
+                    if (direction == "rise" and own <= 0) or (direction == "fall" and own >= 0):
+                        candidate.status = "wrong_direction"
+                        candidate.reason = (
+                            f"Moved {'up' if own > 0 else 'down'} while this case is tracking a "
+                            f"{direction}. The opposite movement is reported as its own case."
+                        )
+                        continue
+
+                # With no parent deviation to explain, sufficiency means nothing and minimality is
+                # unknown for any cell already at the deepest stored level, so maximality would
+                # otherwise be the only surviving gate. One gate is not enough: measured over
+                # eight days of this corpus in which nothing was planted, that left 2.5 confident
+                # accusations per day, most of them cells moving two or three percent. The two
+                # checks below restore a second and third line of defence without borrowing
+                # evidence the mode cannot supply.
+
+                # The accusation rests entirely on the candidate's own movement here, so that
+                # movement has to clear the same bar the system uses to decide anything is worth
+                # reporting. This is not applied in explain-away mode, where a culprit's own
+                # metric need not move at all: a low-converting segment that merely grows in
+                # volume drags a parent rate down while its own rate holds steady.
+                if abs(candidate.relative_effect) < effect_floor:
+                    candidate.status = "immaterial"
                     candidate.reason = (
-                        f"Moved {'up' if own > 0 else 'down'} while this case is tracking a "
-                        f"{direction}. The opposite movement is reported as its own case."
+                        f"Moved {candidate.relative_effect:+.1%}, short of the "
+                        f"{effect_floor:.0%} floor below which nothing is reported. With no "
+                        "parent movement to attribute, its own movement is the whole case."
                     )
                     continue
 
@@ -796,13 +852,64 @@ class Localizer:
                 continue
             viable.append(candidate)
 
-        if not viable:
+        # Rounding before sorting is what makes the later keys reachable. Two segments describing
+        # the same movement through different dimensions -- ad_format=interstitial AND country=ES
+        # against ad_format=interstitial AND region=EU, where those countries are the whole of that
+        # region -- differ in the ninth decimal, and an exact comparison hands the verdict to
+        # whichever floating-point noise came out larger.
+        #
+        # Among explanations that fit indistinguishably well, the last key takes the one covering
+        # the most traffic. Naming a country when an entire region moved with it is a true
+        # statement that is accidentally narrow: it is right about the rows it covers and silent
+        # about the equally affected rows next to it. Maximality does not catch this, because it
+        # compares a candidate against siblings within its own dimension and these two are in
+        # different dimensions, so neither is the other's sibling or parent.
+        if mode == "structural_only":
+            # Sufficiency is meaningless with no parent deviation, so it cannot order these.
+            viable.sort(
+                key=lambda c: (-_bucket(abs(c.relative_effect)), -c.segment.depth, -c.coverage)
+            )
+        else:
+            viable.sort(key=lambda c: (-_bucket(c.sufficiency), -c.segment.depth, -c.coverage))
+        return viable
+
+    def _accuse(
+        self, viable: list[Candidate], mode: str, metric: Metric, window: Window
+    ) -> Candidate | None:
+        """Take the best candidate that also reproduces on data it was not selected on.
+
+        The holdout runs here rather than in ranking because it costs two further queries per
+        candidate, and running it on the whole lattice to reject one cell would be wasteful. The
+        list is already ordered, so in the overwhelmingly common case exactly one is tested.
+
+        Only in structural-only mode does failing it disqualify. There, the candidate's own
+        movement is the entire case and reproduction is the sole independent evidence that the
+        movement is not noise; elsewhere the counterfactual has already done that work, and a
+        holdout is recorded as evidence for the confidence score without being a veto.
+        """
+        rejected: list[Candidate] = []
+        accused: Candidate | None = None
+
+        for candidate in viable[:_MAX_HOLDOUT_TRIALS]:
+            if self.cfg.holdout_enabled:
+                candidate.checks["holdout"] = holdout_check(
+                    self.reader, metric, candidate, window, self.detection.baseline_weeks
+                )
+            if mode == "structural_only" and candidate.check_state("holdout") == "fail":
+                candidate.status = "did_not_reproduce"
+                candidate.reason = candidate.checks["holdout"].detail
+                rejected.append(candidate)
+                continue
+            accused = candidate
+            break
+
+        if accused is None:
             return None
 
-        viable.sort(key=lambda c: (-c.sufficiency, -c.segment.depth))
-        accused = viable[0]
         accused.status = "accused"
-        for other in viable[1:]:
+        for other in viable:
+            if other is accused or other in rejected:
+                continue
             other.status = "partial"
             other.reason = "Explains less of the movement than the accused segment."
         return accused

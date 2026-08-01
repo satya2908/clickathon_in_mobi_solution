@@ -101,15 +101,87 @@ def outcome_for(case: object, expected: dict[str, str]) -> str:
     return "wrong"
 
 
+# Windows carrying no movement anyone planted. Recall says how often the system finds what is
+# there; only a control says how often it announces something that is not, and a system with an
+# unmeasured false-positive rate has an unmeasured precision no matter how good its recall looks.
+#
+# These are derived by subtraction rather than by inspection: the corpus runs 1 June to 5 July and
+# every known movement falls between 16 June and 30 June, so what remains at either end is clean
+# without anyone having examined it for quietness. Picking windows because they looked calm would
+# make this measure nothing at all.
+CONTROL_WINDOWS = [
+    ("early-1", datetime(2026, 6, 8), 24),
+    ("early-2", datetime(2026, 6, 9), 24),
+    ("early-3", datetime(2026, 6, 10), 24),
+    ("early-4", datetime(2026, 6, 11), 24),
+    ("early-5", datetime(2026, 6, 12), 24),
+    ("late-1", datetime(2026, 7, 1), 24),
+    ("late-2", datetime(2026, 7, 2), 24),
+    ("late-3", datetime(2026, 7, 3), 24),
+]
+
+
+def run_controls(cfg, registry, ch, grain: str, threshold: float) -> int:
+    """Count confident accusations in windows where nothing was planted.
+
+    Every accusation here is a false positive by construction. Unattributed cases are counted
+    separately: raising a detection the localizer then declines to attribute is a far cheaper
+    error than naming an innocent segment, and collapsing the two would hide which one the
+    system is actually making.
+    """
+    print("\n" + "=" * 108)
+    print("CONTROLS -- windows with nothing planted in them. Every accusation below is a false positive.")
+    print("-" * 108)
+    print(f"{'window':<10} {'date':<12} {'accused':<11} {'unattributed':<13} {'worst false accusation':<45}")
+    print("-" * 108)
+
+    total_accused = 0
+    total_unattributed = 0
+    for name, start, hours in CONTROL_WINDOWS:
+        window = Window(start=start, end=start + timedelta(hours=hours), grain=grain)
+        result = investigate(
+            cfg, ch, registry, window, tracer=NullTracer(), persist=False, narrate=False
+        )
+        accused = [c for c in result.cases if c.localization.accused is not None]
+        confident = [c for c in accused if c.confidence_value >= threshold]
+        unattributed = len(result.cases) - len(accused)
+
+        worst = ""
+        if confident:
+            top = max(confident, key=lambda c: c.confidence_value)
+            worst = f"{top.finding.metric} {top.segment.label()[:26]} conf={top.confidence_value:.2f}"
+
+        total_accused += len(confident)
+        total_unattributed += unattributed
+        print(
+            f"{name:<10} {start:%Y-%m-%d}   {len(confident):<11} {unattributed:<13} {worst:<45}"
+        )
+
+    print("-" * 108)
+    n = len(CONTROL_WINDOWS)
+    print(
+        f"false accusations: {total_accused} across {n} clean day(s) "
+        f"at confidence >= {threshold:.2f}   ({total_accused / n:.2f} per day)"
+    )
+    print(f"unattributed detections: {total_unattributed} ({total_unattributed / n:.2f} per day)")
+    print("=" * 108 + "\n")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", help="Run one incident by id, e.g. F")
     parser.add_argument("--grain", default="1h")
+    parser.add_argument("--controls", action="store_true", help="Measure the false-positive rate instead")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Confidence at which an accusation counts")
     args = parser.parse_args()
 
     cfg = load_config()
     registry = MetricRegistry.load(os.environ.get("VERDICT_METRICS") or "config/metrics.yaml")
     ch = ClickHouse(cfg.clickhouse)
+
+    if args.controls:
+        return run_controls(cfg, registry, ch, args.grain, args.threshold)
 
     key = [k for k in ANSWER_KEY if not args.only or k.ident == args.only.upper()]
     rows = []
