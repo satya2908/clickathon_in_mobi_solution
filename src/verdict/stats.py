@@ -4,7 +4,7 @@ Pure functions over plain numbers: no database, no configuration, no I/O. That i
 These are the calculations every published claim rests on, so they need to be testable against
 hand-worked examples without standing anything up.
 
-Three ideas here are worth stating outright, because getting any of them wrong produces a
+Four ideas here are worth stating outright, because getting any of them wrong produces a
 system that is confidently and undetectably miscalibrated.
 
 **A rate is not a mean of rates.** The expected fill rate over four historical weeks is
@@ -22,6 +22,13 @@ guarantees, since a planted global outage poisons every Sunday baseline.
 same samples it is compared against, which deflates residuals by exactly m/(m-1). With four
 samples per cell that understates dispersion by a third, and an understated dispersion makes
 every test look better calibrated than it is.
+
+**An estimated scale is not a known scale.** A spread measured from four days is itself a
+random quantity, and when those four days happen to land close together it comes out far too
+small. Reading such a statistic off a normal tail asserts the scale was known exactly, which
+on this corpus turned a fall of 5% into p = 1.6e-155 and buried every fill-rate finding
+underneath it. Student's t on k-1 degrees of freedom prices the uncertainty in and leaves the
+same statistic worth the 1e-4 it is actually worth.
 """
 
 from __future__ import annotations
@@ -61,6 +68,109 @@ def normal_sf(z: float) -> float:
     underflowed hides how strong the evidence actually was.
     """
     return math.erfc(abs(z) / math.sqrt(2.0))
+
+
+#: Iteration cap and convergence tolerance for the incomplete-beta continued fraction. Swept
+#: across one to a million degrees of freedom and statistics from 1e-4 to 1e8, the fraction
+#: converges in four terms typically and forty at worst, so the cap bounds a pathological input
+#: rather than the working case and returning the unconverged value on reaching it is not a
+#: silent wrong answer waiting to happen.
+_BETACF_MAX_ITER = 200
+_BETACF_EPS = 3e-16
+
+#: Substituted for a continued-fraction denominator that has collapsed toward zero. Lentz's
+#: method divides by that denominator on the following line, and the recurrence genuinely
+#: passes near zero for ordinary inputs, so the substitution is load-bearing rather than a
+#: precaution against inputs that never arrive.
+_BETACF_TINY = 1e-300
+
+
+def _betacf(x: float, a: float, b: float) -> float:
+    """Continued fraction for the incomplete beta function, by Lentz's method.
+
+    Lentz is used rather than evaluating the fraction from the bottom up because the depth
+    needed for a given accuracy is not known in advance; the bottom-up form has to be restarted
+    at increasing depths and the results compared, which costs several times the arithmetic to
+    reach the same answer.
+    """
+
+    def guard(value: float) -> float:
+        return _BETACF_TINY if abs(value) < _BETACF_TINY else value
+
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 / guard(1.0 - qab * x / qap)
+    h = d
+    for m in range(1, _BETACF_MAX_ITER + 1):
+        m2 = 2 * m
+        even = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 / guard(1.0 + even * d)
+        c = guard(1.0 + even / c)
+        h *= d * c
+        odd = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 / guard(1.0 + odd * d)
+        c = guard(1.0 + odd / c)
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < _BETACF_EPS:
+            break
+    return h
+
+
+def _betainc(x: float, a: float, b: float) -> float:
+    """Regularized incomplete beta function, I_x(a, b).
+
+    The continued fraction converges quickly only while x stays below (a+1)/(a+b+2); beyond
+    that point the reflection I_x(a, b) = 1 - I_{1-x}(b, a) moves the evaluation back onto the
+    fast side. Both branches share one leading factor because x^a (1-x)^b is invariant under
+    the same exchange.
+
+    The leading factor is assembled in log space. Formed directly it is a ratio of gamma
+    functions that overflows for perfectly ordinary degrees of freedom -- a t test on 350
+    samples is already past the limit of a double -- while the logarithms stay near zero.
+    """
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    front = math.exp(
+        math.lgamma(a + b)
+        - math.lgamma(a)
+        - math.lgamma(b)
+        + a * math.log(x)
+        + b * math.log1p(-x)
+    )
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(x, a, b) / a
+    return 1.0 - front * _betacf(1.0 - x, b, a) / b
+
+
+def student_t_sf(t: float, df: float) -> float:
+    """Two-sided tail probability of Student's t on ``df`` degrees of freedom.
+
+    The sign of the statistic is discarded, exactly as `normal_sf` discards it. Metrics fall at
+    least as often as they rise, and callers rank on p-value without consulting the direction,
+    so a one-sided tail here would score every drop at p near 1 and silently delete half of
+    what this system exists to find.
+
+    Reaching for t rather than the normal is what keeps a scale estimated from a handful of
+    samples honest. A normal tail treats an estimated scale as though it were known exactly,
+    and when four historical points happen to land close together the statistic explodes: this
+    corpus returned p = 1.6e-155 for a move of 5% on exactly that arithmetic. Three degrees of
+    freedom price the same statistic near 1e-4, which is the strength the evidence has.
+
+    ``df <= 0`` means no second sample ever existed to estimate a scale from, so there is no
+    distribution to consult and no evidence to report.
+    """
+    if not math.isfinite(df) or df <= 0.0:
+        return 1.0
+    # t * t rather than t ** 2, which raises OverflowError past about 1e154. Saturating to
+    # infinity sends x to zero and `_betainc` reports an underflowed tail, which is the right
+    # answer for a statistic that large; raising would take down a scan of thousands of
+    # segments over one degenerate cell.
+    return _betainc(df / (df + t * t), df / 2.0, 0.5)
 
 
 def pooled_rate(samples: Sequence[tuple[float, float]]) -> float:
@@ -295,6 +405,19 @@ def count_test(observed: float, expected: float, *, phi: float = 1.0) -> TestRes
     )
 
 
+#: Floor on the log-space scale, in units of relative change. A MAD over four samples is the
+#: mean of the two middle absolute deviations, so two history days landing near the median drag
+#: it toward zero however wide the underlying spread really is, and nothing in the arithmetic
+#: below distinguishes that accident from a genuinely quiet segment. One percent is the point
+#: below which a revenue-per-impression series is not plausibly stable but merely under-sampled:
+#: this corpus produced four-day spreads near 0.2% on segments whose eCPM then moved 5%, and
+#: scoring a routine move at twenty-six standard deviations is what buried every fill-rate
+#: finding underneath it. The floor is applied after the degeneracy check rather than in place
+#: of it, because a history that is flat to numerical precision carries no scale information at
+#: all and handing it a fabricated one would manufacture findings out of fixed-price inventory.
+_MIN_LOG_SPREAD = 0.01
+
+
 def log_ratio_test(
     observed: float, history: Sequence[float], *, min_history: int = 3
 ) -> TestResult:
@@ -303,6 +426,28 @@ def log_ratio_test(
     These are not proportions, so no binomial variance model applies. The comparison is made in
     log space against the spread of the segment's own history, measured with a MAD so that one
     previously anomalous week does not widen the interval enough to hide the current one.
+
+    Three things separate this from a z-test against that spread, and all three bite hard at
+    the four samples of history this system actually has.
+
+    The scale is estimated, never known. Handing an estimate from four points to a normal tail
+    claims a precision nobody has, and when those four points happen to land close together the
+    statistic explodes: on this corpus eCPM and revenue-per-request came back at p = 0 and
+    p = 1.6e-155 for falls of 5%, which is not strong evidence but a broken test, and they
+    crowded every fill-rate and CTR finding out of the published list. Student's t on k - 1
+    degrees of freedom prices that uncertainty in and leaves the same statistic worth about
+    1e-4.
+
+    What is being predicted is a new observation rather than the centre itself, so the standard
+    error is sigma * sqrt(1 + 1/k): the centre carries its own error of sigma/sqrt(k), and the
+    new point varies by a further sigma around wherever the centre truly is. Dropping the term
+    understates the error by 12% at four samples, which at these statistics is worth orders of
+    magnitude in the tail.
+
+    The scale is also floored, at `_MIN_LOG_SPREAD`, because heavier tails alone do not save a
+    segment whose four days happened to land almost on top of one another. Nothing here can
+    tell that accident apart from a genuinely quiet segment, and the floor bounds how confident
+    it is allowed to make the test.
 
     A near-zero MAD means the history was flat to numerical precision. That is treated as
     untestable rather than as infinite confidence, because a flat history usually means a
@@ -313,23 +458,29 @@ def log_ratio_test(
         return TestResult(0.0, 1.0, observed, float("nan"), 0.0, 0.0, "log_ratio_insufficient")
 
     logs = [math.log(v) for v in usable]
+    k = len(logs)
     centre = median(logs)
-    spread = mad(logs)
     expected = math.exp(centre)
 
-    if spread < 1e-9:
+    # `mad` applies the 1.4826 consistency factor, so this is an estimate of sigma rather than
+    # the raw median deviation. The raw one understates the scale of normally distributed data
+    # by a third and inflates every statistic in the same proportion.
+    sigma = mad(logs)
+
+    if sigma < 1e-9:
         return TestResult(0.0, 1.0, observed, expected, observed - expected,
                           observed / expected - 1.0, "log_ratio_degenerate")
 
-    z = (math.log(observed) - centre) / spread
+    standard_error = max(sigma, _MIN_LOG_SPREAD) * math.sqrt(1.0 + 1.0 / k)
+    t = (math.log(observed) - centre) / standard_error
     return TestResult(
-        z=z,
-        p_value=normal_sf(z),
+        z=t,
+        p_value=student_t_sf(t, k - 1),
         observed=observed,
         expected=expected,
         absolute_effect=observed - expected,
         relative_effect=observed / expected - 1.0,
-        model="log_ratio",
+        model="log_ratio_t",
     )
 
 

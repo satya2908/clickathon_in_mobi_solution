@@ -8,6 +8,7 @@ arriving separately as env vars (a Secret, in Kubernetes).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -205,6 +206,12 @@ class DetectionConfig(BaseModel):
 class LocalizationConfig(BaseModel):
     max_candidates: int = 40
     max_depth: int = 2
+    # Relative movement below which a parent metric is treated as not having moved, used only
+    # when the metric's own significance test cannot run on the parent series. That happens for
+    # continuous ratios early in a corpus, where fewer than three prior weeks exist to measure a
+    # spread against. Set well under any business-meaningful move and well over numerical noise;
+    # its only job is to separate "flat by construction" from "moved a little".
+    parent_moved_floor: float = 0.005
     sufficiency_threshold: float = 0.60
     minimality_threshold: float = 0.30
     maximality_threshold: float = 0.50
@@ -267,6 +274,31 @@ class Config(BaseModel):
     confidence: ConfidenceConfig = Field(default_factory=ConfidenceConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     run: RunConfig = Field(default_factory=RunConfig)
+
+    def redacted(self) -> dict[str, Any]:
+        """The configuration with every credential removed.
+
+        A run row records the settings a verdict was produced under, which is what makes an old
+        case interpretable once thresholds have moved on. That row lives in a table any reader
+        can query, so the database password and the model API key must not travel with it.
+
+        Redaction is by field name rather than by an allow-list of safe fields, so a credential
+        added later is covered by default. The name is preserved and only the value is replaced,
+        because knowing that a key was configured is itself useful when explaining why a case has
+        no narration.
+        """
+        secret_names = {"password", "api_key", "secret", "token"}
+        data = self.model_dump(mode="json")
+        for section in data.values():
+            if not isinstance(section, dict):
+                continue
+            for key in list(section):
+                if key in secret_names and section[key]:
+                    section[key] = "***"
+        return data
+
+    def redacted_json(self) -> str:
+        return json.dumps(self.redacted(), sort_keys=True, separators=(",", ":"))
 
 
 DEFAULT_CONFIG_PATH = Path("config/verdict.yaml")

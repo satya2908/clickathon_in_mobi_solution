@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .config import DetectionConfig, LocalizationConfig
-from .detect import Finding
+from .detect import Finding, _pool_history, _test_segment
 from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window, subtract
 from .schema import LATTICE_DEPTH, TOTAL_COMBO
@@ -49,6 +49,67 @@ State = Literal["pass", "fail", "unknown"]
 # Below this, a deviation is too small for a ratio of deviations to mean anything: the
 # denominator of the sufficiency fraction is mostly rounding noise.
 _MIN_TESTABLE_DEVIATION = 1e-9
+
+
+def parent_moved(
+    metric: Metric,
+    weeks: list[Counters],
+    observed: float | None,
+    expected: float | None,
+    phi: float,
+    cfg: LocalizationConfig,
+    detection: DetectionConfig,
+) -> tuple[bool, str]:
+    """Whether the parent metric moved enough for a counterfactual to have anything to restore.
+
+    Returns the decision and the reason for it, because this single choice selects between the
+    two modes of localization and a reader deserves to know which test made it.
+
+    The failure that motivated getting this right is silent, which is what makes it dangerous. A
+    compensating pair moves two segments in opposite directions by amounts that cancel, leaving
+    the total flat by construction; measured on this corpus the total eCPM moved 0.11% while its
+    two legs moved -30% and +25%. Any absolute epsilon calls 0.11% movement, localization then
+    stays in explain-away mode and asks each candidate whether removing it restores a parent that
+    never left, every candidate fails, and the incident is detected but never attributed.
+
+    An absolute threshold cannot work here in any case: the metrics in one registry differ in
+    scale by five orders of magnitude, from a fill rate near 0.78 to hourly requests near 222,000.
+
+    So the primary test is the metric's own significance test, the same one the detector applies
+    to every cell. That introduces no new constant and adapts to the parent's traffic and its
+    measured overdispersion automatically.
+
+    The fallback exists because that test cannot always run. A continuous ratio needs at least
+    three prior weeks to measure a spread, and a window early in a corpus does not have them --
+    on this data a window starting 19 June has two, because the events begin on 1 June. Rather
+    than treat untestable as unmoved, which would silently push every early eCPM investigation
+    into the wrong mode, the fallback compares the relative movement against a configured floor
+    and says so in the reason.
+    """
+    if observed is None or expected is None:
+        return False, "the parent metric has no value in this window"
+
+    deviation = observed - expected
+    if abs(deviation) < _MIN_TESTABLE_DEVIATION:
+        return False, "the parent metric did not move at all"
+
+    relative = deviation / expected if expected else 0.0
+    history = weeks[1:]
+    pooled = _pool_history(metric, history, trim=detection.trim_extremes)
+    test = _test_segment(metric, weeks[0], pooled, history, phi)
+
+    if not test.model.endswith("insufficient"):
+        moved = test.p_value < detection.p_value_threshold
+        return moved, (
+            f"the parent moved {relative:+.2%}, which its own {test.model} test scores at "
+            f"p={test.p_value:.2e} against a threshold of {detection.p_value_threshold:g}"
+        )
+
+    moved = abs(relative) >= cfg.parent_moved_floor
+    return moved, (
+        f"the parent moved {relative:+.2%}; its own test could not run on "
+        f"{len(history)} week(s) of history, so a {cfg.parent_moved_floor:.1%} floor was used"
+    )
 
 
 @dataclass(frozen=True)
@@ -554,7 +615,7 @@ class Localizer:
         self.detection = detection
         self.tracer = tracer
 
-    def localize(self, finding: Finding) -> Localization:
+    def localize(self, finding: Finding, *, direction: str | None = None) -> Localization:
         metric = self.registry.metric(finding.metric)
         window = finding.window
         history = HistoryCache(self.reader, window, self.detection.baseline_weeks)
@@ -581,15 +642,15 @@ class Localizer:
         parent_exp_v = _value(parent_exp, metric)
         parent_dev = (parent_obs_v or 0.0) - (parent_exp_v or 0.0)
 
-        mode = "explain_away"
-        note = ""
-        if abs(parent_dev) < _MIN_TESTABLE_DEVIATION:
-            mode = "structural_only"
-            note = (
-                "The parent metric did not move, so there is nothing for a counterfactual to "
-                "restore. The candidate is judged on its own deviation and on whether its "
-                "siblings share it."
-            )
+        moved, reason = parent_moved(
+            metric, parent_weeks, parent_obs_v, parent_exp_v, finding.phi, self.cfg, self.detection
+        )
+        mode = "explain_away" if moved else "structural_only"
+        note = "" if moved else (
+            f"Judged on siblings rather than by counterfactual because {reason}. With no parent "
+            "deviation to restore, removing a candidate proves nothing, so candidates are "
+            "assessed on their own movement and on whether their siblings share it."
+        )
 
         candidates = self._build_candidates(metric, finding, history)
         for candidate in candidates:
@@ -603,7 +664,7 @@ class Localizer:
                 metric, candidate, history, self.cfg.maximality_threshold
             )
 
-        accused = self._choose(candidates, mode)
+        accused = self._choose(candidates, mode, direction)
 
         if accused is not None and self.cfg.holdout_enabled:
             accused.checks["holdout"] = holdout_check(
@@ -681,19 +742,45 @@ class Localizer:
                     break
         return kept
 
-    def _choose(self, candidates: list[Candidate], mode: str) -> Candidate | None:
+    def _choose(
+        self, candidates: list[Candidate], mode: str, direction: str | None = None
+    ) -> Candidate | None:
         """Pick the narrowest candidate that survives every test it was possible to run.
 
         Ordering is by sufficiency, then by depth descending. The tie-break matters: when a
         two-dimensional cell and the one-dimensional segment containing it explain the same
         amount, the narrower one is the more useful answer, and minimality has already
         eliminated it if it was too narrow to deserve that.
+
+        ``direction`` is honoured only when the parent did not move, and the restriction is
+        deliberate in both halves.
+
+        Where the parent did not move, the only thing distinguishing the two legs of a
+        compensating pair is their sign. Without the filter both the falling leg and the rising
+        leg select the same accused -- whichever deviated more -- and an incident that is by
+        construction two opposing movements gets reported as one, which is precisely the half of
+        it a drop-only detector would have found anyway.
+
+        Where the parent did move, the filter must not be applied, because the culprit's own
+        metric need not move in the same direction as the parent's. A low-converting segment that
+        merely grows in volume pulls a parent rate down without its own rate falling at all, and
+        filtering on sign would clear the one candidate that actually explains the movement.
         """
         viable: list[Candidate] = []
         for candidate in candidates:
             suff = candidate.check_state("sufficiency")
             minim = candidate.check_state("minimality")
             maxim = candidate.check_state("maximality")
+
+            if mode == "structural_only" and direction in {"rise", "fall"}:
+                own = candidate.deviation
+                if (direction == "rise" and own <= 0) or (direction == "fall" and own >= 0):
+                    candidate.status = "wrong_direction"
+                    candidate.reason = (
+                        f"Moved {'up' if own > 0 else 'down'} while this case is tracking a "
+                        f"{direction}. The opposite movement is reported as its own case."
+                    )
+                    continue
 
             if minim == "fail":
                 candidate.status = "too_broad"

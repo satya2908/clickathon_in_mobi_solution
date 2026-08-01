@@ -435,7 +435,8 @@ ORDER BY (case_id, ordinal)""",
   key_b        String,
   denominator  UInt64,
   required     UInt64,
-  reason       LowCardinality(String)
+  reason       LowCardinality(String),
+  resolvable_effect Float64 DEFAULT -1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(window_start)
@@ -472,6 +473,25 @@ ORDER BY (run_id)""",
     ]
 
 
+def migration_statements() -> list[Statement]:
+    """Additive changes to tables that may already exist.
+
+    ``CREATE TABLE IF NOT EXISTS`` is a no-op against a table created by an earlier version, so a
+    column added to the DDL above never reaches a database that has already been set up. Rather
+    than requiring a drop -- which on a populated instance means re-loading nine million rows to
+    gain one column -- each additive change is also expressed as an idempotent ALTER.
+
+    Keep every statement in here safe to run repeatedly and safe to run against a table that
+    already has the final shape, because it runs on every apply.
+    """
+    return [
+        Statement(
+            "migrate_coverage_resolvable_effect",
+            "ALTER TABLE coverage_ledger ADD COLUMN IF NOT EXISTS resolvable_effect Float64 DEFAULT -1",
+        ),
+    ]
+
+
 def all_statements(cfg: Config, registry: MetricRegistry) -> list[Statement]:
     dims = registry.lattice_dimensions
     unknown = [d for d in dims if d not in _DIM_SOURCE_SQL]
@@ -486,6 +506,7 @@ def all_statements(cfg: Config, registry: MetricRegistry) -> list[Statement]:
         + rollup_ddl(cfg)
         + view_ddl(dims)
         + results_ddl(cfg)
+        + migration_statements()
     )
 
 

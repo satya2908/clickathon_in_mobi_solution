@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -14,6 +16,9 @@ from rich.table import Table
 from .config import Config, ConfigError, load_config
 from .db import ClickHouse
 from .metrics import MetricRegistry
+
+if TYPE_CHECKING:
+    from .query import Window
 
 app = typer.Typer(
     name="verdict",
@@ -242,6 +247,128 @@ def load_cmd(
     for warning in report.warnings:
         console.print(f"[yellow]warning[/] {warning}")
     console.print("\n[green]Load verified[/]")
+
+
+def _resolve_window(ch: ClickHouse, start: str | None, hours: int, grain: str) -> Window:
+    """Work out which window to investigate, defaulting to the most recent complete day.
+
+    Defaulting matters more than it looks. The obvious default -- "now minus 24 hours" -- lands
+    on an empty window for a dataset whose events stopped weeks ago, and the run then reports
+    nothing wrong with complete confidence. Anchoring on the data's own last bucket means the
+    command does something useful with no arguments and never mistakes absent data for calm.
+    """
+    from datetime import timedelta
+
+    from .query import Window
+
+    if start:
+        begin = datetime.fromisoformat(start)
+    else:
+        rows = ch.query("SELECT max(bucket) FROM rollup_1h", name="latest_bucket")
+        latest = rows[0][0] if rows and rows[0][0] is not None else None
+        if latest is None:
+            console.print("[bold red]No data[/] in rollup_1h. Run 'verdict load' first.")
+            raise typer.Exit(1)
+        begin = (latest + timedelta(hours=1)) - timedelta(hours=hours)
+
+    return Window(start=begin, end=begin + timedelta(hours=hours), grain=grain)
+
+
+@app.command("investigate")
+def investigate_cmd(
+    config: str = typer.Option(None, "--config", "-c"),
+    start: str = typer.Option(None, "--start", help="Window start, ISO format. Defaults to the last complete day."),
+    hours: int = typer.Option(24, "--hours", help="Window length in hours"),
+    grain: str = typer.Option("1h", "--grain", help="Bucket size: 5m, 1h or 1d"),
+    metric: list[str] = typer.Option(None, "--metric", "-m", help="Restrict to these metrics; repeatable"),
+    no_persist: bool = typer.Option(False, "--no-persist", help="Investigate without writing to ClickHouse"),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Force template narration"),
+    max_cases: int = typer.Option(25, "--max-cases"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Detect, localize and explain anomalies in one window."""
+    _setup_logging(verbose)
+    from .pipeline import investigate
+    from .trace import Tracer
+
+    cfg = _load(config)
+    registry = _registry()
+    ch = ClickHouse(cfg.clickhouse)
+    window = _resolve_window(ch, start, hours, grain)
+    tracer = Tracer(cfg.tracing)
+
+    console.print(f"Investigating [bold]{window.label()}[/] at {window.grain} grain")
+
+    result = investigate(
+        cfg,
+        ch,
+        registry,
+        window,
+        metrics=list(metric) if metric else None,
+        tracer=tracer,
+        persist=not no_persist,
+        narrate=not no_llm,
+        max_cases=max_cases,
+    )
+    tracer.flush()
+
+    console.print(f"\n{result.summary()}\n")
+
+    if not result.cases:
+        console.print("[green]No incident met the reporting bar.[/]")
+        _print_coverage(result)
+        return
+
+    table = Table(title="Cases", show_header=True, header_style="bold")
+    table.add_column("Metric")
+    table.add_column("Verdict")
+    table.add_column("Segment")
+    table.add_column("Observed", justify="right")
+    table.add_column("Expected", justify="right")
+    table.add_column("Effect", justify="right")
+    table.add_column("Conf", justify="right")
+    table.add_column("Impact", justify="right")
+
+    for case in result.cases:
+        row = case.case_row()
+        observed, expected, effect = row[8], row[9], row[10]
+        impact = case.impact
+        money = "" if impact.revenue is None else f"{impact.revenue:,.0f}{'' if impact.direct else '*'}"
+        table.add_row(
+            case.finding.metric,
+            case.verdict_kind,
+            case.segment.label(),
+            f"{observed:,.5g}",
+            f"{expected:,.5g}",
+            f"{effect:+.1%}",
+            f"{case.confidence_value:.2f}",
+            money,
+        )
+    console.print(table)
+    console.print("[dim]* revenue reached through a chain of estimates; see impact_json for the basis.[/]")
+
+    _print_coverage(result)
+
+    if result.persisted:
+        console.print(f"\n[green]Persisted[/] as run {result.run_id}")
+    elif not no_persist:
+        console.print("\n[yellow]One or more writes failed; see logs.[/]")
+
+
+def _print_coverage(result: object) -> None:
+    """Report what could not be tested, always, including when nothing was found.
+
+    Printed unconditionally because a clean run and a run that could not look are the two
+    outcomes most easily confused, and only one of them is good news.
+    """
+    gaps = getattr(result, "gaps", [])
+    if not gaps:
+        return
+    by_reason: dict[str, int] = {}
+    for gap in gaps:
+        by_reason[gap.reason] = by_reason.get(gap.reason, 0) + 1
+    detail = ", ".join(f"{count:,} {reason}" for reason, count in sorted(by_reason.items()))
+    console.print(f"[yellow]Coverage:[/] {len(gaps):,} cell(s) could not be tested ({detail})")
 
 
 @app.command("version")
