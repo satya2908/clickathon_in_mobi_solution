@@ -277,6 +277,7 @@ def _scan_pair(
     overdispersion = max(1.0, spread / typical_error) if typical_error > 0 else 1.0
 
     result.tested_cells += len(grid)
+    effect_floor = metric.effect_threshold(cfg.min_relative_effect)
 
     for key, residual in polish.residuals.items():
         error = errors.get(key)
@@ -284,7 +285,7 @@ def _scan_pair(
             continue
         z = residual / (error * overdispersion)
         effect = math.exp(residual) - 1.0
-        if abs(z) < cfg.structural_z_threshold or abs(effect) < cfg.min_relative_effect:
+        if abs(z) < cfg.structural_z_threshold or abs(effect) < effect_floor:
             continue
         if effect > 0 and not cfg.detect_rises:
             continue
@@ -312,6 +313,7 @@ def _scan_pair(
                 observed_counters=counters,
                 baseline_counters=Counters(),
                 phi=1.0,
+                effect_threshold=effect_floor,
                 notes={
                     "combo": combo,
                     "residual_log": residual,
@@ -361,4 +363,4 @@ def _cell_floor(metric: Metric, cells: dict[Segment, Counters], cfg: DetectionCo
     den = sum(c.denominator(metric) or 0.0 for c in cells.values())
     if den <= 0:
         return float("inf")
-    return required_denominator(num / den, cfg.min_relative_effect)
+    return required_denominator(num / den, metric.effect_threshold(cfg.min_relative_effect))

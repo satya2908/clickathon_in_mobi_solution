@@ -39,9 +39,11 @@ from .stats import (
     clamp_dispersion,
     count_test,
     log_ratio_test,
-    pearson_dispersion,
-    quasi_poisson_dispersion,
+    median,
+    pearson_residuals,
+    poisson_residuals,
     required_denominator,
+    robust_dispersion,
     trim_and_pool,
     two_proportion_test,
 )
@@ -65,6 +67,10 @@ class Finding:
     weeks_kept: int = 0
     weeks_seen: int = 0
     survives_correction: bool = True
+    # The metric's own reportable-effect threshold, carried on the finding so that the
+    # correction step can filter a pooled family spanning several metrics without having to
+    # look each one up again.
+    effect_threshold: float = 0.0
     notes: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -147,22 +153,24 @@ def estimate_dispersion(
             continue
 
         if is_proportion:
-            num = sum(c.numerator(metric) for c in usable)
-            den = sum(c.denominator(metric) or 0.0 for c in usable)
-            if den <= 0:
-                continue
-            p = num / den
+            # The reference rate is the median of the weekly rates, not the pooled mean of
+            # them. Pooling lets a contaminated week drag the reference away from the truth,
+            # after which every *clean* week shows a large residual too -- so a robust spread
+            # around a non-robust centre still reports the contamination as dispersion. On this
+            # corpus, where one baseline week carries a global fill-rate incident, pooling
+            # produced phi near 100 for cells whose three good weeks agree to within 0.2%.
+            p = median([c.numerator(metric) / c.denominator(metric) for c in usable])
             if not (0.0 < p < 1.0):
                 continue
             n_groups += 1
             cells.extend((c.denominator(metric), c.numerator(metric), p) for c in usable)
         elif metric.kind == "count":
             values = [c.numerator(metric) for c in usable]
-            mean = sum(values) / len(values)
-            if mean <= 0:
+            centre = median(values)
+            if centre <= 0:
                 continue
             n_groups += 1
-            cells.extend((v, mean) for v in values)
+            cells.extend((v, centre) for v in values)
         else:
             # Continuous ratios have no count-based variance model; log_ratio_test measures
             # spread from the segment's own history instead.
@@ -171,11 +179,14 @@ def estimate_dispersion(
     if not cells:
         return 1.0
 
-    raw = (
-        pearson_dispersion(cells, n_groups)
-        if is_proportion
-        else quasi_poisson_dispersion(cells, n_groups)
-    )
+    # Robust rather than mean-based. The baseline window can itself contain an incident -- it
+    # does in this corpus -- and a mean of squared residuals lets that one week set the
+    # dispersion for every cell, which inflates every denominator floor in proportion and
+    # silently switches detection off. `n_groups` is no longer needed for the degrees-of-freedom
+    # correction, but is kept in the signature because the mean-based estimators still take it
+    # and the two are compared in the tests.
+    residuals = pearson_residuals(cells) if is_proportion else poisson_residuals(cells)
+    raw = robust_dispersion(residuals)
     return clamp_dispersion(raw, cfg.dispersion_floor, cfg.dispersion_ceiling)
 
 
@@ -269,7 +280,7 @@ def apply_correction(result: DetectionResult, cfg: DetectionConfig) -> Detection
     result.findings = [
         f
         for f in result.findings
-        if f.survives_correction and abs(f.relative_effect) >= cfg.min_relative_effect
+        if f.survives_correction and abs(f.relative_effect) >= f.effect_threshold
     ]
     result.corrected = True
     return result
@@ -317,7 +328,7 @@ def _detect_temporal_combo(
 
     # Sized once per combo from the combo's own overall rate, so the floor reflects this
     # metric's noise rather than a constant chosen with a different metric in mind.
-    floor = _denominator_floor(metric, history, cfg, phi)
+    floor = _denominator_floor(metric, history, cfg, phi, baseline_weeks=cfg.baseline_weeks)
 
     for segment, weeks in history.items():
         observed, hist = weeks[0], weeks[1:]
@@ -375,6 +386,7 @@ def _detect_temporal_combo(
                 phi=phi,
                 weeks_kept=pooled.weeks_kept,
                 weeks_seen=pooled.weeks_seen,
+                effect_threshold=metric.effect_threshold(cfg.min_relative_effect),
                 notes={"combo": combo, "dropped_week_rate": pooled.dropped_rate},
             )
         )
@@ -391,7 +403,8 @@ def _detect_temporal_combo(
             )
             span.result(
                 f"{len(result.findings)} cell(s) deviated beyond "
-                f"{cfg.min_relative_effect:.0%} at p<{cfg.p_value_threshold}; "
+                f"{metric.effect_threshold(cfg.min_relative_effect):.0%} "
+                f"at p<{cfg.p_value_threshold} after correction; "
                 f"{len(result.gaps)} untestable; dispersion {phi:.2f}x."
             )
             span.set("verdict.phi", phi)
@@ -401,13 +414,19 @@ def _detect_temporal_combo(
 
 
 def _denominator_floor(
-    metric: Metric, history: dict[Segment, list[Counters]], cfg: DetectionConfig, phi: float
+    metric: Metric,
+    history: dict[Segment, list[Counters]],
+    cfg: DetectionConfig,
+    phi: float,
+    *,
+    baseline_weeks: int = 1,
 ) -> float:
     """Traffic a cell needs before its result is worth believing.
 
-    Derived from the metric's own baseline rate and the smallest effect worth reporting, so a
+    Derived from the metric's own baseline rate and its own smallest reportable effect, so a
     low-rate metric such as CTR automatically demands far more traffic than a high-rate one
-    such as fill rate. A single shared constant cannot serve both.
+    such as fill rate. A single shared constant cannot serve both: at 5% relative, fill rate
+    needs 2,783 requests here and CTR needs 828,297 impressions.
     """
     if not metric.is_proportion:
         # Counts and continuous ratios have no proportion to size against; require enough
@@ -425,12 +444,23 @@ def _denominator_floor(
 
     rate = total_num / total_den
     needed = required_denominator(
-        rate, cfg.min_relative_effect, phi=phi, power_z=_power_z(cfg.target_power)
+        rate,
+        metric.effect_threshold(cfg.min_relative_effect),
+        phi=phi,
+        power_z=_power_z(cfg.target_power),
     )
-    # The floor applies to one window, while `needed` is per arm of the comparison. The
-    # baseline arm pools several weeks and is correspondingly better resolved, so requiring
-    # the full per-arm figure of the observation window alone would be too strict.
-    return needed if needed != float("inf") else float("inf")
+    if needed == float("inf"):
+        return needed
+
+    # `needed` is the size of *each* arm of a two-sample comparison. Only the observation arm is
+    # a single window; the baseline arm pools several weeks and so is already better resolved.
+    # For a comparison of one window against k pooled weeks the variance is proportional to
+    # 1/n + 1/(k*n), so the window itself needs n * (1 + 1/k) / 2 rather than the full n.
+    #
+    # This used to be a comment above `return needed`, which is to say the relaxation was
+    # described but never applied, making the floor twice as strict as intended.
+    k = max(1, baseline_weeks)
+    return needed * (1.0 + 1.0 / k) / 2.0
 
 
 def _power_z(power: float) -> float:

@@ -22,15 +22,30 @@ from verdict.detect import DetectionResult, Finding, _lattice_combos, apply_corr
 from verdict.metrics import MetricRegistry
 from verdict.query import Counters, Segment, Window
 from verdict.schema import LATTICE_DEPTH, TOTAL_COMBO
-from verdict.stats import TestResult
+from verdict.stats import (
+    TestResult,
+    pearson_dispersion,
+    pearson_residuals,
+    required_denominator,
+    robust_dispersion,
+)
 
 REGISTRY = MetricRegistry.load(Path(__file__).resolve().parents[1] / "config" / "metrics.yaml")
 WINDOW = Window(datetime(2026, 6, 23), datetime(2026, 6, 24), "1h")
 
+# Measured from the loaded corpus, not assumed.
+BASELINES = {"fill_rate": 0.780879, "render_rate": 0.979958, "ctr": 0.010881}
 
-def finding(p_value: float, relative_effect: float = -0.20, name: str = "fill_rate") -> Finding:
+
+def finding(
+    p_value: float,
+    relative_effect: float = -0.20,
+    name: str = "fill_rate",
+    effect_threshold: float = 0.05,
+) -> Finding:
     return Finding(
         metric=name,
+        effect_threshold=effect_threshold,
         segment=Segment.of(country=f"C{p_value:.12f}"),
         window=WINDOW,
         detector="temporal",
@@ -159,6 +174,114 @@ class TestFamilyIsPooledAcrossMetrics:
         pooled.extend(corrected)
         pooled.extend(result_of(finding(0.5)))
         assert pooled.corrected is False
+
+
+class TestEveryMetricIsActuallyDetectable:
+    """Guards against a threshold that silently retires a metric.
+
+    A `min_relative_effect` too small for a metric's baseline rate does not make the system
+    more sensitive -- it makes the required sample size unreachable, so every cell is filed as
+    a coverage gap and no incident on that metric can ever be reported. The failure is silent
+    and looks like a clean bill of health.
+
+    The traffic figures below are measured from the loaded corpus: 9M requests over 35 days,
+    196,773 impressions/day, and a median country cell holding 9,732 impressions/day.
+    """
+
+    DAILY = {"requests": 257_143, "fills": 200_754, "impressions": 196_773}
+    DEPTH1_MEDIAN = {"requests": 12_723, "fills": 9_934, "impressions": 9_732}
+
+    def available(self, metric, per_day: dict[str, int], days: float) -> float:
+        return per_day[metric.denominator_field] * days
+
+    def needed(self, name: str) -> float:
+        metric = REGISTRY.metric(name)
+        return required_denominator(
+            BASELINES[name], metric.effect_threshold(DetectionConfig().min_relative_effect)
+        )
+
+    @pytest.mark.parametrize("name", ["fill_rate", "render_rate", "ctr"])
+    def test_the_grand_total_is_testable_within_a_day(self, name):
+        have = self.available(REGISTRY.metric(name), self.DAILY, 1.0)
+        assert self.needed(name) <= have, (
+            f"{name} cannot be tested at the grand total in a day: needs "
+            f"{self.needed(name):,.0f} but only {have:,.0f} are available"
+        )
+
+    @pytest.mark.parametrize("name", ["fill_rate", "render_rate", "ctr"])
+    def test_a_median_one_way_cell_is_testable_within_a_week(self, name):
+        """Localization is worthless if only the total can be tested -- the whole point is to
+        name a segment."""
+        assert self.needed(name) <= self.available(REGISTRY.metric(name), self.DEPTH1_MEDIAN, 7.0)
+
+    def test_the_global_default_would_have_made_ctr_undetectable(self):
+        """Pins why the per-metric override exists, so removing it fails loudly here."""
+        needed = required_denominator(BASELINES["ctr"], DetectionConfig().min_relative_effect)
+        assert needed > self.available(REGISTRY.metric("ctr"), self.DEPTH1_MEDIAN, 35.0)
+
+    def test_ctr_cannot_be_localized_to_a_two_way_cell_here(self):
+        """A limitation worth pinning rather than discovering during a demo. A median two-way
+        cell holds ~771 impressions/day; CTR needs 29,766 even at its 25% threshold."""
+        assert self.needed("ctr") > 771 * 7
+
+
+class TestDispersionSurvivesAContaminatedBaseline:
+    """The bug that made every floor unreachable.
+
+    One baseline week in this corpus carries a real global fill-rate incident: weeks 2, 3 and 4
+    sit at 0.785 for essentially every country while week 1 sits between 0.70 and 0.77. The
+    mean-based Pearson estimate turned that into phi between 25 and 128 depending on the
+    segment, pegged against the ceiling of 50. Every denominator floor scales with phi, so a
+    fifty-fold inflation put every cell in the lattice below the floor and the detector reported
+    nothing at all for a day on which fill rate had visibly moved.
+    """
+
+    def clean(self, weeks: int = 4, n: int = 20_000, p: float = 0.78) -> list[tuple]:
+        return [(n, n * p, p)] * weeks
+
+    def contaminated(self, n: int = 20_000, p: float = 0.78, bad: float = 0.70,
+                     *, robust_centre: bool = True) -> list[tuple]:
+        """Three weeks at the true rate and one carrying an incident, as measured here.
+
+        `robust_centre` selects how the group's reference rate was derived: the median of the
+        weekly rates, as estimate_dispersion now does, or the pooled mean it used to use. The
+        distinction is the point -- a robust spread around a contaminated centre is still wrong.
+        """
+        centre = p if robust_centre else (3 * p + bad) / 4
+        return [(n, n * p, centre)] * 3 + [(n, n * bad, centre)]
+
+    def test_the_mean_based_estimate_is_destroyed_by_one_bad_week(self):
+        phi = pearson_dispersion(self.contaminated(robust_centre=False), n_groups=1)
+        assert phi > 50, f"expected the failure to reproduce, got phi={phi:.1f}"
+
+    def test_a_robust_spread_around_a_pooled_centre_is_not_enough(self):
+        """Pooling the reference rate over all four weeks drags it toward the incident, so the
+        three good weeks each show a large residual and the median no longer rescues it."""
+        phi = robust_dispersion(pearson_residuals(self.contaminated(robust_centre=False)))
+        assert phi > 50
+
+    def test_the_robust_estimate_is_not(self):
+        phi = robust_dispersion(pearson_residuals(self.contaminated()))
+        assert phi < 5.0, f"one contaminated week still dominates: phi={phi:.1f}"
+
+    def test_both_agree_when_nothing_is_contaminated(self):
+        """The robust estimator must not simply return a small number regardless. On clean data
+        it has to land near the mean-based value, or it is not measuring dispersion at all."""
+        cells = [(20_000, 20_000 * r, 0.78) for r in (0.770, 0.776, 0.784, 0.790)]
+        mean_based = pearson_dispersion(cells, n_groups=1)
+        assert robust_dispersion(pearson_residuals(cells)) == pytest.approx(
+            mean_based, rel=0.75
+        )
+
+    def test_genuine_overdispersion_is_still_reported(self):
+        """A metric that really does vary far more than binomial must still inflate the floor --
+        suppressing that would make every test overconfident."""
+        cells = [(20_000, 20_000 * r, 0.78) for r in (0.70, 0.74, 0.82, 0.86)]
+        assert robust_dispersion(pearson_residuals(cells)) > 100
+
+    def test_no_usable_residuals_falls_back_to_one(self):
+        assert robust_dispersion([]) == 1.0
+        assert robust_dispersion([float("nan"), float("inf")]) == 1.0
 
 
 class TestLatticeMatchesGrain:

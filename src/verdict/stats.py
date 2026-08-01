@@ -121,20 +121,24 @@ def pearson_dispersion(
     segments -- there is always structure the model does not carry -- so a naive estimate that
     comes back below 1.0 is not evidence of under-dispersion, it is evidence of the bias.
     """
-    total = 0.0
-    used = 0
+    residuals = pearson_residuals(cells)
+    dof = len(residuals) - n_groups
+    if dof <= 0:
+        return 1.0
+    return sum(residuals) / dof
+
+
+def pearson_residuals(cells: Sequence[tuple[float, float, float]]) -> list[float]:
+    """Squared standardised binomial residuals, one per usable cell."""
+    out = []
     for n, k, p in cells:
         if n <= 0 or not (0.0 < p < 1.0):
             continue
         variance = n * p * (1.0 - p)
         if variance <= 0:
             continue
-        total += (k - n * p) ** 2 / variance
-        used += 1
-    dof = used - n_groups
-    if dof <= 0:
-        return 1.0
-    return total / dof
+        out.append((k - n * p) ** 2 / variance)
+    return out
 
 
 def quasi_poisson_dispersion(
@@ -146,17 +150,55 @@ def quasi_poisson_dispersion(
     are reliably overdispersed relative to Poisson -- often by a large factor. Assuming pure
     Poisson would treat ordinary traffic variation as overwhelming evidence.
     """
-    total = 0.0
-    used = 0
-    for observed, expected in cells:
-        if expected <= 0:
-            continue
-        total += (observed - expected) ** 2 / expected
-        used += 1
-    dof = used - n_groups
+    residuals = poisson_residuals(cells)
+    dof = len(residuals) - n_groups
     if dof <= 0:
         return 1.0
-    return total / dof
+    return sum(residuals) / dof
+
+
+def poisson_residuals(cells: Sequence[tuple[float, float]]) -> list[float]:
+    """Squared standardised Poisson residuals, one per usable cell."""
+    return [
+        (observed - expected) ** 2 / expected for observed, expected in cells if expected > 0
+    ]
+
+
+#: Median of a chi-square distribution with one degree of freedom. Under the null, a squared
+#: standardised residual follows that distribution, so dividing the median squared residual by
+#: this constant gives an estimate on the same scale as the mean-based one.
+_CHI2_1DF_MEDIAN = 0.454936423
+
+#: Scales the median squared residual to the mean-based dispersion scale.
+_ROBUST_SCALE = 1.0 / _CHI2_1DF_MEDIAN
+
+
+def robust_dispersion(squared_residuals: Sequence[float]) -> float:
+    """Overdispersion from the *median* squared residual rather than the mean.
+
+    The mean-based estimators are sums of squared residuals divided by degrees of freedom, so a
+    single contaminated observation dominates the total. That is not a hypothetical: on this
+    corpus one baseline week carried a real, global fill-rate incident, and the mean-based
+    estimate came back at 25 to 128 depending on the segment -- pegged against the ceiling of
+    50. Every denominator floor is proportional to phi, so a fifty-fold inflation made every
+    cell in the lattice untestable and the detector reported a clean bill of health for a day on
+    which fill rate had visibly moved. The clamp that was supposed to prevent exactly this
+    instead delivered it, because the cap is far above the point where detection dies.
+
+    Taking the median tolerates up to half the observations being contaminated, which for four
+    weekly samples means one bad week costs nothing. Under the null a squared standardised
+    residual is chi-square with one degree of freedom, so the median is divided by that
+    distribution's median to land on the same scale the mean-based estimator would give on clean
+    data.
+
+    Trimming the worst week instead would also work, but it discards a real observation on the
+    basis of the very quantity being estimated, and with four samples that biases the result
+    downward by construction. The median makes no such choice.
+    """
+    usable = [r for r in squared_residuals if math.isfinite(r) and r >= 0.0]
+    if not usable:
+        return 1.0
+    return median(usable) * _ROBUST_SCALE
 
 
 def clamp_dispersion(phi: float, floor: float = 1.0, ceiling: float = 50.0) -> float:

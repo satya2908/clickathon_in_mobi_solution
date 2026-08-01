@@ -46,6 +46,19 @@ metrics:
     support: request
     direction_of_concern: both
     is_proportion: true
+    # Baseline 0.7809. Chosen from measured coverage over a one-day window, being the fraction
+    # of lattice cells whose traffic clears the detection floor:
+    #
+    #     threshold    total   1-way   2-way
+    #        2%          0%     28%      5%
+    #        5%        100%     41%     50%
+    #        8%        100%     72%     81%      <- chosen
+    #       10%        100%     86%     90%
+    #
+    # 8% is the knee: below it coverage falls away sharply, above it the extra coverage costs
+    # sensitivity to real movement. Cells that miss the floor are recorded in the coverage
+    # ledger, so the system reports that it could not test them rather than that they were fine.
+    min_relative_effect: 0.08
 
   impressions:
     label: Impressions
@@ -63,6 +76,11 @@ metrics:
     support: fill
     direction_of_concern: both
     is_proportion: true
+    # Baseline 0.9800. A rate this close to 1 has very little variance -- 3% relative needs only
+    # about 1,100 fills -- so this is the most sensitive metric in the set and the earliest
+    # warning that something between the auction and the device has broken. Measured coverage at
+    # 3% is 100% of one-way cells and 81% of two-way cells.
+    min_relative_effect: 0.03
 
   clicks:
     label: Clicks
@@ -80,6 +98,26 @@ metrics:
     support: impression
     direction_of_concern: both
     is_proportion: true
+    # Baseline 0.010881, and a rate this low is expensive to measure: variance per sample scales
+    # like p(1-p) while the effect being detected scales like p, so halving the rate quadruples
+    # the sample needed for the same relative sensitivity.
+    #
+    # Measured on this corpus, at 5% relative CTR needs 828,297 impressions -- 4.2 days of all
+    # traffic at the grand total, 85 days for a median country cell, 1,009 days for a
+    # country x OS cell. Against 196,773 impressions/day, the global 5% default therefore made
+    # CTR undetectable at every level except the grand total over multiple days: every segment
+    # was filed as a coverage gap and no CTR incident could ever be reported.
+    #
+    # At 25% it needs 29,766, which the grand total reaches in under four hours. Measured
+    # coverage over a one-day window is 100% of the total, 38% of one-way cells and 1% of
+    # two-way cells; below 25% it is zero everywhere, so this is not a preference but the limit
+    # of the data volume. It is still well inside the size of a real CTR incident -- a broken
+    # creative or a dropped click-tracking endpoint moves CTR by tens of percent, not by five.
+    #
+    # The consequence to state plainly: CTR cannot be localized to a two-way segment in this
+    # corpus. Those cells stay in the coverage ledger, which is the correct place for them --
+    # the system reports that it could not test them rather than that they were fine.
+    min_relative_effect: 0.25
 
   revenue:
     label: Revenue

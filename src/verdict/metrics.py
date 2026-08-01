@@ -60,10 +60,22 @@ class Metric:
     scale: float = 1.0
     is_proportion: bool = False
     direction_of_concern: str = "both"
+    # Smallest relative change worth reporting, and the effect the detection floor is sized
+    # for. Per metric because the required sample size depends on the baseline rate, so one
+    # global value is simultaneously too lax for a high rate and impossible for a low one.
+    # Measured on this corpus: at 5% relative, fill rate needs 2,783 requests but CTR needs
+    # 828,297 impressions -- 4.2 days of all traffic, or 85 days for a median country cell.
+    # A single 5% setting therefore excluded every CTR segment as underpowered while letting
+    # fill rate report moves far smaller than an operator would act on. None inherits the
+    # global default.
+    min_relative_effect: float | None = None
 
     @property
     def is_ratio(self) -> bool:
         return self.denominator is not None
+
+    def effect_threshold(self, default: float) -> float:
+        return self.min_relative_effect if self.min_relative_effect is not None else default
 
     @property
     def numerator_field(self) -> str:
@@ -108,6 +120,19 @@ class Dimension:
     high_cardinality: bool = False
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    out = float(value)
+    if not 0.0 < out < 1.0:
+        raise MetricError(
+            f"min_relative_effect must be between 0 and 1 exclusive, got {out}. It is a relative "
+            "drop, so 1.0 would mean the rate falls to zero and the required sample size is "
+            "undefined."
+        )
+    return out
+
+
 @dataclass
 class MetricRegistry:
     metrics: dict[str, Metric]
@@ -148,6 +173,7 @@ class MetricRegistry:
                 scale=float(spec.get("scale", 1.0)),
                 is_proportion=bool(spec.get("is_proportion", False)),
                 direction_of_concern=spec.get("direction_of_concern", "both"),
+                min_relative_effect=_optional_float(spec.get("min_relative_effect")),
             )
 
         dimensions: dict[str, Dimension] = {}
