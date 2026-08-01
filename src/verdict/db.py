@@ -9,9 +9,11 @@ SQL each investigation step ran.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,11 +51,71 @@ class QueryError(RuntimeError):
         self.sql = sql
 
 
+def as_utc(parameters: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Stamp naive datetimes as UTC before they are bound.
+
+    The driver reads a naive datetime as *local* time and converts it to UTC on the way out, so
+    on a machine at +05:30 a window asked for as midnight arrives at the server as 18:30 the
+    previous day. Every bucket column is DateTime('UTC'), so the whole system silently analysed
+    a window shifted by the developer's offset: baselines shifted with it, which is why the
+    findings still looked sane, but the reported window was wrong, the observed value was mixed
+    from two sides of an incident boundary, and the same code produced different answers in
+    different timezones.
+
+    Normalising here rather than at each call site because there is no caller for whom local
+    time is the right reading. The data has one clock, and it is UTC.
+    """
+    if not parameters:
+        return parameters
+    return {
+        key: value.replace(tzinfo=UTC)
+        if isinstance(value, datetime) and value.tzinfo is None
+        else value
+        for key, value in parameters.items()
+    }
+
+
+def render_sql(sql: str, parameters: dict[str, Any] | None) -> str:
+    """Substitute bound parameters into a statement so a reader can paste and run it.
+
+    Only ever used for display. Every value here came from the system's own config and its own
+    rollup keys rather than from anything a user typed, but rendering is still kept away from
+    the execution path on principle: the client binds parameters properly, and the day these two
+    diverge should be a day the displayed query looks wrong rather than a day an injected string
+    reaches the server.
+    """
+    out = sql
+    for key, value in (parameters or {}).items():
+        if isinstance(value, datetime):
+            literal = f"'{value:%Y-%m-%d %H:%M:%S}'"
+        elif isinstance(value, str):
+            literal = "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+        elif isinstance(value, bool):
+            literal = "1" if value else "0"
+        elif value is None:
+            literal = "NULL"
+        else:
+            literal = str(value)
+        out = re.sub(r"\{" + re.escape(key) + r":[A-Za-z0-9_()]+\}", literal, out)
+    return " ".join(out.split())
+
+
 class ClickHouse:
     def __init__(self, cfg: ClickHouseConfig, *, tracer: Any | None = None) -> None:
         self.cfg = cfg
         self._tracer = tracer
         self._client: Client | None = None
+        # Off by default. A run issues thousands of queries and holding them all would be a
+        # slow leak for no benefit; the case file turns it on because provenance is the point
+        # there. Keyed by query name so the record is one entry per distinct query *shape*
+        # rather than per execution -- a reader wants to know what kinds of question the system
+        # asked, not to scroll past four hundred copies of the same one with different keys.
+        self.record_sql = False
+        self.recorded: dict[str, str] = {}
+
+    def _record(self, name: str, sql: str, parameters: dict[str, Any] | None) -> None:
+        if self.record_sql and name not in self.recorded:
+            self.recorded[name] = render_sql(sql, parameters)
 
     @property
     def client(self) -> Client:
@@ -174,6 +236,8 @@ class ClickHouse:
         name: str = "query",
         settings: dict[str, Any] | None = None,
     ) -> list[tuple]:
+        parameters = as_utc(parameters)
+        self._record(name, sql, parameters)
         with self._span(name, sql):
             started = time.perf_counter()
             result = self._run(
@@ -192,6 +256,7 @@ class ClickHouse:
         *,
         name: str = "query",
     ) -> list[dict[str, Any]]:
+        parameters = as_utc(parameters)
         with self._span(name, sql):
             result = self._run(
                 sql, lambda: self.client.query(sql, parameters=parameters), name=name
