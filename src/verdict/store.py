@@ -62,6 +62,12 @@ CASE_COLUMNS = (
     "impact_json",
     "narrative",
     "narrative_source",
+    "narrative_model",
+    "narrative_verified",
+    "narrative_rejected",
+    "narrative_prompt_tokens",
+    "narrative_completion_tokens",
+    "narrative_latency_ms",
     "fingerprint",
     "trace_id",
     "recurrence_of",
@@ -316,6 +322,12 @@ class Case:
     confidence_json: str = "{}"
     narrative: str = ""
     narrative_source: str = "template"
+    narrative_model: str = ""
+    narrative_verified: bool = False
+    narrative_rejected: list[str] = field(default_factory=list)
+    narrative_prompt_tokens: int = 0
+    narrative_completion_tokens: int = 0
+    narrative_latency_ms: int = 0
     trace_id: str = ""
     recurrence_of: str = ""
     steps: list[dict[str, Any]] = field(default_factory=list)
@@ -365,6 +377,12 @@ class Case:
             _json(self.impact.to_dict()),
             self.narrative,
             self.narrative_source,
+            self.narrative_model,
+            1 if self.narrative_verified else 0,
+            list(self.narrative_rejected),
+            int(self.narrative_prompt_tokens),
+            int(self.narrative_completion_tokens),
+            int(self.narrative_latency_ms),
             self.fingerprint,
             self.trace_id,
             self.recurrence_of,
@@ -462,6 +480,12 @@ def build_case(
         confidence_json=_json(_confidence_payload(confidence)),
         narrative=str(getattr(narration, "text", "") or ""),
         narrative_source=str(getattr(narration, "source", "template") or "template"),
+        narrative_model=str(getattr(narration, "model", "") or ""),
+        narrative_verified=bool(getattr(narration, "verified", False)),
+        narrative_rejected=[str(f) for f in (getattr(narration, "unsupported", None) or [])],
+        narrative_prompt_tokens=int(getattr(narration, "prompt_tokens", 0) or 0),
+        narrative_completion_tokens=int(getattr(narration, "completion_tokens", 0) or 0),
+        narrative_latency_ms=int(getattr(narration, "latency_ms", 0) or 0),
         trace_id=trace_id,
         steps=steps or [],
     )

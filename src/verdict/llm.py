@@ -15,6 +15,7 @@ vendor works unchanged. Nothing here assumes OpenAI the company, only the wire f
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,14 +24,45 @@ from .config import LLMConfig
 log = logging.getLogger(__name__)
 
 
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
 @dataclass(frozen=True)
 class Completion:
-    """One model response, or the reason there is not one."""
+    """One model response, or the reason there is not one.
+
+    The usage counters are recorded even on the failure paths, because the interesting question
+    about a discarded draft is usually what it cost and how long it took, and a call that was
+    refused after two retries is not free.
+    """
 
     text: str
     model: str
     ok: bool
     error: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_ms: int = 0
+
+
+def _usage(response: Any) -> tuple[int, int]:
+    """Prompt and completion token counts, zero where the provider does not report them.
+
+    Read defensively: ``usage`` is optional in the wire format and several compatible servers
+    omit it entirely. Note that on reasoning models ``completion_tokens`` excludes the hidden
+    thinking, so it will not reconcile with ``total_tokens`` -- the gap between them is the
+    thinking, and it is the quantity that explains a truncated draft.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0
+
+    def count(name: str) -> int:
+        value = getattr(usage, name, None)
+        return value if isinstance(value, int) and value >= 0 else 0
+
+    return count("prompt_tokens"), count("completion_tokens")
 
 
 def _extract_text(response: Any) -> str:
@@ -120,6 +152,7 @@ class LLMClient:
         if self.cfg.reasoning_effort:
             extra["reasoning_effort"] = self.cfg.reasoning_effort
 
+        started = time.monotonic()
         try:
             response = self._client.chat.completions.create(
                 model=self.cfg.model,
@@ -137,11 +170,20 @@ class LLMClient:
             # the socket, a DNS failure, a JSON body the client cannot parse. Enumerating
             # classes would mean the unanticipated failure is the one that escapes.
             log.warning("Narration call to %s failed: %s", self.cfg.base_url, exc)
-            return Completion("", self.cfg.model, False, f"{type(exc).__name__}: {exc}")
+            return Completion(
+                "", self.cfg.model, False, f"{type(exc).__name__}: {exc}",
+                latency_ms=_elapsed_ms(started),
+            )
+
+        elapsed = _elapsed_ms(started)
+        prompt_tokens, completion_tokens = _usage(response)
 
         text = _extract_text(response).strip()
         if not text:
-            return Completion("", self.cfg.model, False, "The endpoint returned no content.")
+            return Completion(
+                "", self.cfg.model, False, "The endpoint returned no content.",
+                prompt_tokens, completion_tokens, elapsed,
+            )
 
         # A response cut off at the token ceiling is rejected rather than published. The numeric
         # verifier downstream cannot catch this: it checks that every figure was computed, and a
@@ -156,11 +198,14 @@ class LLMClient:
                 f"The response hit the {self.cfg.max_tokens}-token ceiling before finishing. "
                 "Raise llm.max_tokens, or set llm.reasoning_effort low if the model bills "
                 "hidden reasoning against that budget.",
+                prompt_tokens, completion_tokens, elapsed,
             )
 
         # The served model can differ from the one requested -- an alias resolving to a dated
         # snapshot, a gateway routing to a fallback -- and the case file should record what
         # actually wrote the prose rather than what was asked for.
         served = getattr(response, "model", None)
-        return Completion(text, served if isinstance(served, str) and served else self.cfg.model,
-                          True, "")
+        return Completion(
+            text, served if isinstance(served, str) and served else self.cfg.model, True, "",
+            prompt_tokens, completion_tokens, elapsed,
+        )

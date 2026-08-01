@@ -374,6 +374,17 @@ def results_ddl(cfg: Config) -> list[Statement]:
   impact_json     String,
   narrative       String,
   narrative_source LowCardinality(String),
+  -- What the model did, kept queryable rather than only logged. The system's central claim is
+  -- that a figure it cannot verify never reaches a reader, and these columns are what turn that
+  -- from an assertion into something a sceptic can check: filter on narrative_verified = 0 and
+  -- narrative_rejected holds the exact literals the model wrote that the evidence did not
+  -- support. A guardrail whose firings are not recorded cannot be audited.
+  narrative_model LowCardinality(String),
+  narrative_verified UInt8,
+  narrative_rejected Array(String),
+  narrative_prompt_tokens UInt32,
+  narrative_completion_tokens UInt32,
+  narrative_latency_ms UInt32,
   fingerprint     String,
   trace_id        String,
   recurrence_of   String
@@ -488,6 +499,17 @@ def migration_statements() -> list[Statement]:
         Statement(
             "migrate_coverage_resolvable_effect",
             "ALTER TABLE coverage_ledger ADD COLUMN IF NOT EXISTS resolvable_effect Float64 DEFAULT -1",
+        ),
+        *(
+            Statement(f"migrate_cases_{name.split()[0]}", f"ALTER TABLE cases ADD COLUMN IF NOT EXISTS {name}")
+            for name in (
+                "narrative_model LowCardinality(String) DEFAULT ''",
+                "narrative_verified UInt8 DEFAULT 0",
+                "narrative_rejected Array(String) DEFAULT []",
+                "narrative_prompt_tokens UInt32 DEFAULT 0",
+                "narrative_completion_tokens UInt32 DEFAULT 0",
+                "narrative_latency_ms UInt32 DEFAULT 0",
+            )
         ),
     ]
 
