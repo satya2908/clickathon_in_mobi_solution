@@ -33,6 +33,7 @@ from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window
 from .schema import LATTICE_DEPTH, TOTAL_COMBO
 from .stats import (
+    NEAR_TOTAL_COLLAPSE,
     Pooled,
     TestResult,
     benjamini_hochberg,
@@ -43,6 +44,7 @@ from .stats import (
     pearson_residuals,
     poisson_residuals,
     required_denominator,
+    resolvable_effect,
     robust_dispersion,
     trim_and_pool,
     two_proportion_test,
@@ -71,6 +73,10 @@ class Finding:
     # correction step can filter a pooled family spanning several metrics without having to
     # look each one up again.
     effect_threshold: float = 0.0
+    # Smallest relative move this cell could have resolved, given the traffic it actually
+    # carried. Reported alongside the finding so a reader can tell a result that was
+    # comfortably detectable from one that sat at the edge of what the data supports.
+    resolvable_effect: float | None = None
     notes: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -106,6 +112,11 @@ class CoverageGap:
     denominator: float
     required: float
     reason: str
+    # Smallest relative move this cell could have resolved with the traffic it had. None means
+    # not even a near-total collapse would have been significant. Publishing it is what makes
+    # the ledger useful: "not tested" is an absence, "could only have seen a fall of 12% or
+    # more" is a quantity an operator can weigh against how large the incident might be.
+    resolvable_effect: float | None = None
 
 
 @dataclass
@@ -329,11 +340,20 @@ def _detect_temporal_combo(
     # Sized once per combo from the combo's own overall rate, so the floor reflects this
     # metric's noise rather than a constant chosen with a different metric in mind.
     floor = _denominator_floor(metric, history, cfg, phi, baseline_weeks=cfg.baseline_weeks)
+    rate = _pooled_rate(metric, history)
 
     for segment, weeks in history.items():
         observed, hist = weeks[0], weeks[1:]
 
         den = (observed.denominator(metric) if metric.is_ratio else observed.requests) or 0.0
+        # What this particular cell can resolve, measured from the traffic it actually has
+        # rather than assumed from a threshold set in advance. None means it could not resolve
+        # even a near-total collapse, which is the only honest definition of untestable.
+        sensitivity = (
+            resolvable_effect(rate, den * _ARM_RELIEF(cfg.baseline_weeks), phi=phi)
+            if rate is not None and metric.is_proportion
+            else None
+        )
         if den < floor:
             result.gaps.append(
                 CoverageGap(
@@ -342,6 +362,7 @@ def _detect_temporal_combo(
                     denominator=den,
                     required=floor,
                     reason="below_detection_floor",
+                    resolvable_effect=sensitivity,
                 )
             )
             continue
@@ -387,6 +408,7 @@ def _detect_temporal_combo(
                 weeks_kept=pooled.weeks_kept,
                 weeks_seen=pooled.weeks_seen,
                 effect_threshold=metric.effect_threshold(cfg.min_relative_effect),
+                resolvable_effect=sensitivity,
                 notes={"combo": combo, "dropped_week_rate": pooled.dropped_rate},
             )
         )
@@ -433,19 +455,27 @@ def _denominator_floor(
         # exposure that a single event cannot dominate the cell.
         return 100.0
 
-    total_num = 0.0
-    total_den = 0.0
-    for weeks in history.values():
-        for counters in weeks[1:]:
-            total_num += counters.numerator(metric)
-            total_den += counters.denominator(metric) or 0.0
-    if total_den <= 0:
+    rate = _pooled_rate(metric, history)
+    if rate is None:
         return float("inf")
 
-    rate = total_num / total_den
+    # Sized against a near-total collapse, not against the smallest effect anyone hopes to see.
+    #
+    # This used to take `min_relative_effect`, which made the floor only as permissive as a
+    # threshold chosen in advance -- and choosing that threshold well requires knowing the
+    # traffic, which means fitting it to the corpus in hand. Worse, it discarded cells that were
+    # perfectly testable: a segment whose fill rate goes to zero is unmistakable at almost any
+    # volume, yet a floor sized for a 5% move threw it away as "below detection floor" before
+    # any test ran.
+    #
+    # A cell is untestable only when even a 95% fall would not reach significance. That bound
+    # comes from the arithmetic rather than from this dataset, so it transfers to data of any
+    # size. Everything above it is tested, each cell's actual sensitivity is recorded alongside
+    # the result, and the false-discovery correction -- not an arbitrary volume cutoff -- is
+    # what keeps small noisy cells out of the published list.
     needed = required_denominator(
         rate,
-        metric.effect_threshold(cfg.min_relative_effect),
+        NEAR_TOTAL_COLLAPSE,
         phi=phi,
         power_z=_power_z(cfg.target_power),
     )
@@ -459,8 +489,32 @@ def _denominator_floor(
     #
     # This used to be a comment above `return needed`, which is to say the relaxation was
     # described but never applied, making the floor twice as strict as intended.
+    return needed * _ARM_RELIEF(baseline_weeks)
+
+
+def _ARM_RELIEF(baseline_weeks: int) -> float:  # noqa: N802 - reads as a constant at call sites
+    """How much of the per-arm sample size a single observation window must supply.
+
+    A two-sample size is per arm, but only the observation arm is one window; the baseline arm
+    pools k weeks and is already better resolved. Variance goes as 1/n + 1/(kn), so the window
+    needs (1 + 1/k)/2 of the per-arm figure.
+    """
     k = max(1, baseline_weeks)
-    return needed * (1.0 + 1.0 / k) / 2.0
+    return (1.0 + 1.0 / k) / 2.0
+
+
+def _pooled_rate(metric: Metric, history: dict[Segment, list[Counters]]) -> float | None:
+    """The combo's overall baseline rate, pooled over every cell and every historical week."""
+    total_num = 0.0
+    total_den = 0.0
+    for weeks in history.values():
+        for counters in weeks[1:]:
+            total_num += counters.numerator(metric)
+            total_den += counters.denominator(metric) or 0.0
+    if total_den <= 0:
+        return None
+    rate = total_num / total_den
+    return rate if 0.0 < rate < 1.0 else None
 
 
 def _power_z(power: float) -> float:

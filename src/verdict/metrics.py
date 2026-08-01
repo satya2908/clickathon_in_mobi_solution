@@ -60,14 +60,16 @@ class Metric:
     scale: float = 1.0
     is_proportion: bool = False
     direction_of_concern: str = "both"
-    # Smallest relative change worth reporting, and the effect the detection floor is sized
-    # for. Per metric because the required sample size depends on the baseline rate, so one
-    # global value is simultaneously too lax for a high rate and impossible for a low one.
-    # Measured on this corpus: at 5% relative, fill rate needs 2,783 requests but CTR needs
-    # 828,297 impressions -- 4.2 days of all traffic, or 85 days for a median country cell.
-    # A single 5% setting therefore excluded every CTR segment as underpowered while letting
-    # fill rate report moves far smaller than an operator would act on. None inherits the
-    # global default.
+    # Smallest relative change worth putting in front of a human. A reporting policy, not a
+    # detection limit: what the system *can* see is computed per cell from the traffic that
+    # cell actually carried (`stats.resolvable_effect`) and published with the result, so this
+    # never has to be tuned to a dataset to keep detection alive.
+    #
+    # Left unset for every metric here on purpose. An earlier version set it per metric from
+    # measured coverage on the corpus in hand -- 8% for fill rate, 25% for CTR -- which made
+    # the constants a summary of this dataset's traffic volume, and therefore wrong for a
+    # smaller or larger slice. Override it only for a genuine business reason, never to make
+    # the numbers on a particular dataset come out well.
     min_relative_effect: float | None = None
 
     @property

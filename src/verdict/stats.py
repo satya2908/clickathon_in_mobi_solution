@@ -361,6 +361,56 @@ def required_denominator(
     return phi * numerator / (p1 - p2) ** 2
 
 
+#: Largest relative drop worth sizing a floor against. A cell that cannot resolve a fall of
+#: this size cannot resolve anything, because the metric would have to more than collapse for
+#: the test to fire. Not fitted to any dataset -- it is the edge of the possible, since a
+#: relative drop of 1.0 takes the rate to zero and makes the required sample size undefined.
+NEAR_TOTAL_COLLAPSE = 0.95
+
+
+def resolvable_effect(
+    baseline_rate: float,
+    denominator: float,
+    *,
+    alpha_z: float = Z_ALPHA_01,
+    power_z: float = Z_POWER_80,
+    phi: float = 1.0,
+    tolerance: float = 1e-4,
+) -> float | None:
+    """Smallest relative drop this much traffic can resolve, or None if none can be.
+
+    The inverse of `required_denominator`, and the honest way to express a detection limit: it
+    is a property of the cell in front of you, not a constant chosen in advance. Reporting it
+    turns "this segment was not tested" into "this segment could only have shown a fall of 12%
+    or more", which an operator can act on and a reviewer can check.
+
+    Solved by bisection rather than algebraically. The closed form is a quartic in the effect
+    once the pooled-variance term is expanded, and its roots need care near p2 -> 0; bisection
+    over a monotone function costs about forty evaluations of arithmetic that is already cheap.
+    """
+    if denominator <= 0 or not 0.0 < baseline_rate < 1.0:
+        return None
+
+    def needed(effect: float) -> float:
+        return required_denominator(
+            baseline_rate, effect, alpha_z=alpha_z, power_z=power_z, phi=phi
+        )
+
+    # Monotone decreasing in effect, so if even a near-total collapse needs more traffic than
+    # the cell has, nothing is resolvable and the cell is genuinely untestable.
+    if needed(NEAR_TOTAL_COLLAPSE) > denominator:
+        return None
+
+    lo, hi = 0.0, NEAR_TOTAL_COLLAPSE
+    while hi - lo > tolerance:
+        mid = (lo + hi) / 2.0
+        if needed(mid) > denominator:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
 def wilson_interval(k: float, n: float, *, z: float = Z_ALPHA_01) -> tuple[float, float]:
     """Wilson score interval for a proportion.
 

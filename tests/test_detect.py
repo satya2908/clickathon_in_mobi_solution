@@ -18,20 +18,29 @@ from pathlib import Path
 import pytest
 
 from verdict.config import DetectionConfig
-from verdict.detect import DetectionResult, Finding, _lattice_combos, apply_correction
+from verdict.detect import (
+    DetectionResult,
+    Finding,
+    _denominator_floor,
+    _lattice_combos,
+    apply_correction,
+)
 from verdict.metrics import MetricRegistry
 from verdict.query import Counters, Segment, Window
 from verdict.schema import LATTICE_DEPTH, TOTAL_COMBO
 from verdict.stats import (
+    NEAR_TOTAL_COLLAPSE,
     TestResult,
     pearson_dispersion,
     pearson_residuals,
     required_denominator,
+    resolvable_effect,
     robust_dispersion,
 )
 
 REGISTRY = MetricRegistry.load(Path(__file__).resolve().parents[1] / "config" / "metrics.yaml")
 WINDOW = Window(datetime(2026, 6, 23), datetime(2026, 6, 24), "1h")
+SEGMENT = Segment.of(country="US")
 
 # Measured from the loaded corpus, not assumed.
 BASELINES = {"fill_rate": 0.780879, "render_rate": 0.979958, "ctr": 0.010881}
@@ -194,35 +203,68 @@ class TestEveryMetricIsActuallyDetectable:
     def available(self, metric, per_day: dict[str, int], days: float) -> float:
         return per_day[metric.denominator_field] * days
 
-    def needed(self, name: str) -> float:
-        metric = REGISTRY.metric(name)
-        return required_denominator(
-            BASELINES[name], metric.effect_threshold(DetectionConfig().min_relative_effect)
+    def floor(self, name: str) -> float:
+        """What the detection floor actually is: sized against a near-total collapse."""
+        return required_denominator(BASELINES[name], NEAR_TOTAL_COLLAPSE)
+
+    @pytest.mark.parametrize("name", ["fill_rate", "render_rate", "ctr"])
+    def test_a_median_one_way_cell_clears_the_floor_in_a_day(self, name):
+        have = self.available(REGISTRY.metric(name), self.DEPTH1_MEDIAN, 1.0)
+        assert self.floor(name) <= have, (
+            f"{name} cannot be tested at all in a median one-way cell: the floor is "
+            f"{self.floor(name):,.0f} but only {have:,.0f} are available"
         )
 
     @pytest.mark.parametrize("name", ["fill_rate", "render_rate", "ctr"])
-    def test_the_grand_total_is_testable_within_a_day(self, name):
-        have = self.available(REGISTRY.metric(name), self.DAILY, 1.0)
-        assert self.needed(name) <= have, (
-            f"{name} cannot be tested at the grand total in a day: needs "
-            f"{self.needed(name):,.0f} but only {have:,.0f} are available"
+    def test_the_floor_does_not_depend_on_the_reporting_threshold(self, name):
+        """The property that removes the overfitting.
+
+        The floor used to be sized from `min_relative_effect`, so keeping detection alive meant
+        choosing that constant to suit the traffic in the corpus at hand -- which is fitting a
+        hyperparameter to the data. It is now sized from the edge of the possible instead, so
+        changing the reporting policy cannot switch detection off, and no value in the config
+        needs to know how much traffic this particular dataset happens to carry.
+        """
+        history = {SEGMENT: [Counters()] + [self.counters(name)] * 4}
+        floors = {
+            _denominator_floor(
+                REGISTRY.metric(name),
+                history,
+                DetectionConfig(min_relative_effect=thr),
+                1.0,
+                baseline_weeks=4,
+            )
+            for thr in (0.01, 0.05, 0.25, 0.50)
+        }
+        assert len(floors) == 1
+
+    def counters(self, name: str) -> Counters:
+        rate = BASELINES[name]
+        if name == "fill_rate":
+            return Counters(requests=100_000, fills=int(100_000 * rate))
+        if name == "render_rate":
+            return Counters(requests=100_000, fills=100_000, impressions=int(100_000 * rate))
+        return Counters(
+            requests=100_000, fills=100_000, impressions=100_000, clicks=int(100_000 * rate)
         )
 
     @pytest.mark.parametrize("name", ["fill_rate", "render_rate", "ctr"])
-    def test_a_median_one_way_cell_is_testable_within_a_week(self, name):
-        """Localization is worthless if only the total can be tested -- the whole point is to
-        name a segment."""
-        assert self.needed(name) <= self.available(REGISTRY.metric(name), self.DEPTH1_MEDIAN, 7.0)
+    def test_sensitivity_is_reported_rather_than_assumed(self, name):
+        """Every tested cell says what it could have seen, so a null result is quantified."""
+        have = self.available(REGISTRY.metric(name), self.DEPTH1_MEDIAN, 1.0)
+        effect = resolvable_effect(BASELINES[name], have)
+        assert effect is not None and 0.0 < effect < NEAR_TOTAL_COLLAPSE
 
-    def test_the_global_default_would_have_made_ctr_undetectable(self):
-        """Pins why the per-metric override exists, so removing it fails loudly here."""
-        needed = required_denominator(BASELINES["ctr"], DetectionConfig().min_relative_effect)
-        assert needed > self.available(REGISTRY.metric("ctr"), self.DEPTH1_MEDIAN, 35.0)
+    def test_a_cell_too_small_for_any_effect_reports_none(self):
+        assert resolvable_effect(BASELINES["ctr"], 50) is None
 
-    def test_ctr_cannot_be_localized_to_a_two_way_cell_here(self):
-        """A limitation worth pinning rather than discovering during a demo. A median two-way
-        cell holds ~771 impressions/day; CTR needs 29,766 even at its 25% threshold."""
-        assert self.needed("ctr") > 771 * 7
+    def test_ctr_is_far_less_sensitive_than_fill_rate_at_equal_traffic(self):
+        """Not a threshold to tune but a fact about the arithmetic: variance per sample goes as
+        p(1-p) while the effect goes as p, so a low rate costs sensitivity."""
+        fill = resolvable_effect(BASELINES["fill_rate"], 50_000)
+        ctr = resolvable_effect(BASELINES["ctr"], 50_000)
+        assert fill is not None and ctr is not None
+        assert ctr > 5 * fill
 
 
 class TestDispersionSurvivesAContaminatedBaseline:
