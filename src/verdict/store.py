@@ -71,6 +71,9 @@ CASE_COLUMNS = (
     "fingerprint",
     "trace_id",
     "recurrence_of",
+    "detector",
+    "mode",
+    "cells_tested",
 )
 
 CANDIDATE_COLUMNS = (
@@ -330,7 +333,19 @@ class Case:
     narrative_latency_ms: int = 0
     trace_id: str = ""
     recurrence_of: str = ""
+    # Size of the sweep this finding came out of. Held on the case rather than looked up from
+    # the run, because a reader weighing one survivor of four thousand tests against one of
+    # forty needs the denominator next to the claim, not a join away.
+    cells_tested: int = 0
     steps: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def detector(self) -> str:
+        return self.finding.detector
+
+    @property
+    def mode(self) -> str:
+        return self.localization.mode
 
     @property
     def segment(self) -> Segment:
@@ -386,6 +401,9 @@ class Case:
             self.fingerprint,
             self.trace_id,
             self.recurrence_of,
+            self.detector,
+            self.mode,
+            int(self.cells_tested),
         ]
 
     def candidate_rows(self) -> list[list[Any]]:
@@ -448,6 +466,7 @@ def build_case(
     trace_id: str = "",
     steps: list[dict[str, Any]] | None = None,
     detected_at: datetime | None = None,
+    cells_tested: int = 0,
 ) -> Case:
     """Assemble a case from the parts each stage produced.
 
@@ -486,6 +505,7 @@ def build_case(
         narrative_prompt_tokens=int(getattr(narration, "prompt_tokens", 0) or 0),
         narrative_completion_tokens=int(getattr(narration, "completion_tokens", 0) or 0),
         narrative_latency_ms=int(getattr(narration, "latency_ms", 0) or 0),
+        cells_tested=int(cells_tested),
         trace_id=trace_id,
         steps=steps or [],
     )

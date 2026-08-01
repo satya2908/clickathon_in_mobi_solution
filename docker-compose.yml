@@ -92,6 +92,39 @@ services:
     # Long-lived so `docker compose exec verdict verdict <command>` works during a demo.
     entrypoint: ["sleep", "infinity"]
 
+  # ---- Console, profile "web" ----
+  #
+  #   docker compose --profile web up -d --build
+  #
+  # Server components query ClickHouse directly. There is no API tier because a second service
+  # would exist only to forward the same query, with the same credentials, to the same database.
+  # The credentials never reach the browser: every read runs during render.
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: verdict-web:${VERDICT_TAG:-local}
+    container_name: verdict-web
+    restart: unless-stopped
+    profiles: ["web"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      # Same six names the engine reads, so one .env configures both and they cannot drift
+      # onto different databases.
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
+
+      # Both are clicked in the browser, so they must be reachable from the host rather than
+      # from inside the compose network -- a service name would resolve here and fail there.
+      NEXT_PUBLIC_CHAT_URL: ${NEXT_PUBLIC_CHAT_URL:-http://localhost:${LIBRECHAT_PORT:-3080}}
+      NEXT_PUBLIC_HYPERDX_URL: ${NEXT_PUBLIC_HYPERDX_URL:-https://hyperdx.clickhouse.cloud}
+
   # ---- Conversational surface, profile "chat" ----
   #
   #   docker compose --profile chat up -d

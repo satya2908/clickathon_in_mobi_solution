@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 
-from verdict.db import as_utc, render_sql
+from verdict.db import as_utc, render_sql, rows_as_utc
 
 
 class TestNaiveDatetimesAreReadAsUTC:
@@ -55,3 +55,29 @@ class TestRenderedSQLMatchesWhatRan:
     def test_a_placeholder_with_no_parameter_is_left_visible(self):
         """Better an obviously unrendered query than a plausible one missing a filter."""
         assert "{e:DateTime}" in render_sql("WHERE b < {e:DateTime}", {})
+
+
+class TestWritingIsAlsoNormalised:
+    """Reading was only half of it. A naive datetime handed to insert is shifted by the host
+    offset exactly as a query parameter was, so a case investigated at midnight was stored as
+    18:30 the previous day -- on a half-hour boundary no hourly bucket can match."""
+
+    def test_a_naive_row_value_is_read_as_utc(self):
+        [[stamped]] = rows_as_utc([[datetime(2026, 6, 23, 0, 0)]])
+        assert stamped == datetime(2026, 6, 23, 0, 0, tzinfo=UTC)
+
+    def test_an_aware_value_is_left_where_it_was(self):
+        aware = datetime(2026, 6, 23, 0, 0, tzinfo=UTC)
+        [[stamped]] = rows_as_utc([[aware]])
+        assert stamped is aware
+
+    def test_everything_else_passes_through(self):
+        [row] = rows_as_utc([["fill_rate", 3, 0.44, None]])
+        assert row == ["fill_rate", 3, 0.44, None]
+
+    def test_the_window_survives_a_round_trip_through_a_row(self):
+        """The shape the bug actually took: midnight in, midnight out, on any host."""
+        start = datetime(2026, 6, 23, 0, 0)
+        [[stamped]] = rows_as_utc([[start]])
+        assert stamped.utcoffset() == timedelta(0)
+        assert stamped.hour == 0 and stamped.minute == 0

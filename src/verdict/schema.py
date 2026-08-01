@@ -387,7 +387,14 @@ def results_ddl(cfg: Config) -> list[Statement]:
   narrative_latency_ms UInt32,
   fingerprint     String,
   trace_id        String,
-  recurrence_of   String
+  recurrence_of   String,
+  -- How the verdict was reached, as opposed to what it says. A reader deciding how much
+  -- weight to give a case needs to know whether it came from a comparison against history
+  -- or against siblings, whether localization could run the removal test at all, and how
+  -- wide a sweep the finding survived.
+  detector        LowCardinality(String),
+  mode            LowCardinality(String),
+  cells_tested    UInt32
 )
 ENGINE = ReplacingMergeTree(detected_at)
 PARTITION BY toYYYYMM(detected_at)
@@ -509,6 +516,9 @@ def migration_statements() -> list[Statement]:
                 "narrative_prompt_tokens UInt32 DEFAULT 0",
                 "narrative_completion_tokens UInt32 DEFAULT 0",
                 "narrative_latency_ms UInt32 DEFAULT 0",
+                "detector LowCardinality(String) DEFAULT ''",
+                "mode LowCardinality(String) DEFAULT ''",
+                "cells_tested UInt32 DEFAULT 0",
             )
         ),
     ]
