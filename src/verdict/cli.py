@@ -274,6 +274,108 @@ def _resolve_window(ch: ClickHouse, start: str | None, hours: int, grain: str) -
     return Window(start=begin, end=begin + timedelta(hours=hours), grain=grain)
 
 
+@app.command("inject")
+def inject_cmd(
+    out_dir: str = typer.Argument(..., help="Where to write the injected corpus and answer key"),
+    config: str = typer.Option(None, "--config", "-c"),
+    data_dir: str = typer.Option(None, "--data-dir", "-d", help="Source corpus; overrides run.data_dir"),
+    catalogue: str = typer.Option(None, "--catalogue", help="JSON list of specs; omit for the built-in sweep"),
+    seed: int = typer.Option(0, "--seed", help="Shifts every segment choice in the built-in sweep"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Plant synthetic incidents in a copy of the corpus and write the answer key beside it.
+
+    The point is to score the system on movements it was never developed against. Accuracy on
+    the incidents already in the corpus measures how well the code fits data its author has
+    read; the six planted here were chosen for shapes the design is known to handle badly as
+    well as ones it should catch, and three of them are expected misses that are recorded as
+    known boundaries rather than discovered as surprises. One is a clean control carrying no
+    incident at all, where the only correct output is silence.
+
+    Writes a full corpus rather than mutating in place, so the original is never at risk and
+    the result loads through the ordinary path: point 'verdict load --data-dir' at the output,
+    against a database that is not holding anything you want to keep.
+    """
+    _setup_logging(verbose)
+    import json
+    import shutil
+
+    import pyarrow.parquet as pq
+
+    from .inject import DimensionIndex, InjectionError, apply, plan
+    from .injectcat import built_in_sweep, specs_from_json
+
+    cfg = _load(config)
+    source = Path(data_dir or cfg.run.data_dir)
+    target = Path(out_dir)
+    fact = source / "ad_events.parquet"
+    if not fact.exists():
+        console.print(f"[bold red]No corpus[/] at {fact}")
+        raise typer.Exit(1)
+    if target.resolve() == source.resolve():
+        console.print("[bold red]Refusing[/] to write the injected corpus over the original.")
+        raise typer.Exit(1)
+
+    target.mkdir(parents=True, exist_ok=True)
+    dims = (
+        DimensionIndex.from_csv(source / "geo_device.csv", "geo_device_id")
+        .merged(DimensionIndex.from_csv(source / "apps.csv", "app_id"))
+        .merged(DimensionIndex.from_csv(source / "advertisers.csv", "advertiser_id"))
+    )
+    for name in ("apps.csv", "advertisers.csv", "geo_device.csv"):
+        shutil.copy2(source / name, target / name)
+
+    table = pq.read_table(fact)
+    console.print(f"Read [bold]{table.num_rows:,}[/] events from {fact}")
+
+    if catalogue:
+        specs = specs_from_json(Path(catalogue).read_text())
+    else:
+        specs = built_in_sweep(table, dims, seed=seed)
+
+    keys = []
+    summary = Table(title="Planted incidents", show_header=True, header_style="bold")
+    summary.add_column("Kind")
+    summary.add_column("Metric")
+    summary.add_column("Segment")
+    summary.add_column("Asked", justify="right")
+    summary.add_column("Got", justify="right")
+    summary.add_column("Rows", justify="right")
+    summary.add_column("Expect")
+
+    for spec in specs:
+        try:
+            incident = plan(spec)
+            table, report = apply(table, incident, dimensions=dims)
+        except InjectionError as exc:
+            console.print(f"[bold red]Injection failed[/] for {spec.kind}/{spec.metric}: {exc}")
+            raise typer.Exit(1) from exc
+
+        key = incident.with_outcome(report)
+        keys.append(key.to_dict())
+        where = ", ".join(f"{k}={v}" for k, v in spec.where.items()) or "(global)"
+        expect = "found" if key.expected_detectable else f"miss: {key.blind_spot[:26]}"
+        summary.add_row(
+            spec.kind,
+            spec.metric,
+            where[:34],
+            f"{spec.magnitude:+.0%}" if spec.magnitude else "-",
+            f"{report.realised_magnitude:+.1%}",
+            f"{report.rows_changed:,}",
+            expect,
+        )
+
+    pq.write_table(table, target / "ad_events.parquet")
+    (target / "answer_key.json").write_text(json.dumps(keys, indent=2))
+
+    console.print(summary)
+    console.print(f"\nWrote corpus and [bold]answer_key.json[/] to {target}")
+    console.print(
+        "Next: point a throwaway database at it with "
+        f"[bold]verdict schema apply[/] then [bold]verdict load --data-dir {target}[/]"
+    )
+
+
 @app.command("investigate")
 def investigate_cmd(
     config: str = typer.Option(None, "--config", "-c"),
