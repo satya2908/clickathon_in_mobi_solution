@@ -376,35 +376,6 @@ def inject_cmd(
     )
 
 
-def _attach_series(ch: ClickHouse, registry: MetricRegistry, result: object) -> None:
-    """Fetch a level-over-time series for each accused segment, purely for the chart.
-
-    After the investigation rather than during it, and on a separate attribute rather than on
-    the finding, so that nothing a detector reads can be influenced by what a chart needs. One
-    query per case: a run with three cases pays three, which is noise against the thousands the
-    detectors issue.
-
-    A failure here costs a sparkline and nothing else, so it is swallowed. A case file that
-    refused to render because a decoration could not be drawn would be a worse outcome than one
-    with a missing chart.
-    """
-    from datetime import timedelta
-
-    from .query import RollupReader
-
-    reader = RollupReader(ch)
-    window = result.window
-    lookback = window.start - timedelta(days=14)
-    for case in result.cases:
-        try:
-            metric = registry.metric(case.finding.metric)
-            points = reader.series(case.segment, lookback, window.end, window.grain)
-            case.series = [(bucket, counters.value(metric)) for bucket, counters in points]
-        except Exception as exc:  # noqa: BLE001 - a missing chart must not lose the case file
-            logging.getLogger(__name__).debug("series for %s failed: %s", case.case_id, exc)
-            case.series = []
-
-
 @app.command("investigate")
 def investigate_cmd(
     config: str = typer.Option(None, "--config", "-c"),
@@ -415,7 +386,6 @@ def investigate_cmd(
     no_persist: bool = typer.Option(False, "--no-persist", help="Investigate without writing to ClickHouse"),
     no_llm: bool = typer.Option(False, "--no-llm", help="Force template narration"),
     max_cases: int = typer.Option(25, "--max-cases"),
-    report: str = typer.Option(None, "--report", help="Write a self-contained HTML case file here"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Detect, localize and explain anomalies in one window."""
@@ -426,10 +396,6 @@ def investigate_cmd(
     cfg = _load(config)
     registry = _registry()
     ch = ClickHouse(cfg.clickhouse)
-    # Only when a case file is being written. Recording is per distinct query name, so the cost
-    # is a few dozen strings rather than one per execution, but there is no reason to pay it on
-    # a run whose output nobody will read the provenance of.
-    ch.record_sql = bool(report)
     window = _resolve_window(ch, start, hours, grain)
     tracer = Tracer(cfg.tracing)
 
@@ -447,15 +413,6 @@ def investigate_cmd(
         max_cases=max_cases,
     )
     tracer.flush()
-
-    if report:
-        from .report import render
-
-        _attach_series(ch, registry, result)
-        path = Path(report)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(render(result, registry, queries=dict(ch.recorded)), encoding="utf-8")
-        console.print(f"Case file written to [bold]{path}[/]")
 
     console.print(f"\n{result.summary()}\n")
 
