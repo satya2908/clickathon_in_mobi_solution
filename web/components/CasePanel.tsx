@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CloseIcon, LinkIcon } from './icons';
 import { TraceTree } from './TraceTree';
 import { Narrative } from './Narrative';
+import { usePanelWidth } from './usePanelWidth';
 import { Recommendations } from './Recommendations';
 import { Waterfall } from './Waterfall';
 import { Segment } from './Segment';
@@ -155,6 +156,7 @@ export function CasePanel({
   const [sel, setSel] = useState(() => (nodes.find(n => n.name.startsWith('localize:')) ?? nodes[0])?.step_id ?? '');
   const [method, setMethod] = useState(false);
   const [view, setView] = useState<'tree' | 'timeline'>('tree');
+  const { width, dragging, onPointerDown, onKeyDown, reset, min } = usePanelWidth();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -188,7 +190,26 @@ export function CasePanel({
   return (
     <>
       <div className="scrim" onMouseDown={onClose} />
-      <div className="side" role="dialog" aria-modal="true" aria-label={`Case ${c.case_id.slice(0, 8)}`}>
+      <div
+        className={`side${dragging ? ' dragging' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Case ${c.case_id.slice(0, 8)}`}
+        style={width === null ? undefined : { width }}
+      >
+        <div
+          className="sgrip"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel — arrow keys, or double-click to reset"
+          aria-valuenow={width ?? 0}
+          aria-valuemin={min}
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onKeyDown={onKeyDown}
+          onDoubleClick={reset}
+          title="Drag to resize · double-click to reset"
+        />
         <div className="shead">
           <div className="stop">
             <div style={{ minWidth: 0, flex: 1 }}>
@@ -511,56 +532,75 @@ export function CasePanel({
                 )}
               </div>
 
-              <Narrative text={c.narrative} />
+              {/* Prose holds a readable measure while the facts move alongside it. Stacking
+                  them left a column of empty panel to the right of every line, and the
+                  impact figures are what a reader checks the prose against. */}
+              <div className="nargrid">
+                <div className="narmain">
+                  <Narrative text={c.narrative} />
 
-              {c.unsupported.length > 0 && (
-                <div className="guard">
-                  <b>guard rejected draft</b>
-                  <span>
-                    {c.unsupported.length} figures absent from the evidence bundle ({c.unsupported.join(', ')}) — template published instead
-                  </span>
+                  {c.unsupported.length > 0 && (
+                    <div className="guard">
+                      <b>guard rejected draft</b>
+                      <span>
+                        {c.unsupported.length} figures absent from the evidence bundle ({c.unsupported.join(', ')}) — template published instead
+                      </span>
+                    </div>
+                  )}
                 </div>
-              )}
 
-              <div className="tblbox" style={{ maxWidth: 560 }}>
-                <table className="tbl dense">
-                  <colgroup>
-                    <col style={{ width: 130 }} />
-                    <col />
-                  </colgroup>
-                  <tbody>
-                    <tr>
-                      <td className="m dim2">units</td>
-                      <td className="m strong">
-                        {c.impact_json.units.toLocaleString()} {c.impact_json.unit}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="m dim2">revenue</td>
-                      <td className="m strong">
-                        {c.impact_json.revenue != null ? (
-                          money(c.impact_json.revenue)
-                        ) : (
-                          <span className="dim2">not priced &mdash; {c.metric} is a count</span>
-                        )}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="m dim2">basis</td>
-                      <td title={c.impact_json.basis.join(' -> ')}>
-                        {c.impact_json.basis.length ? (
-                          c.impact_json.basis.join(' \u2192 ')
-                        ) : (
-                          <span className="dim2">measured directly</span>
-                        )}
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="m dim2">direct</td>
-                      <td className="m">{String(c.impact_json.direct)}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <aside className="naraside">
+                  <div className="hd" style={{ marginBottom: 8 }}>
+                    Impact
+                  </div>
+                  <div className="tblbox">
+                    <table className="tbl dense">
+                      <colgroup>
+                        <col style={{ width: 78 }} />
+                        <col />
+                      </colgroup>
+                      <tbody>
+                        <tr>
+                          <td className="m dim2">units</td>
+                          <td className="m strong">
+                            {c.impact_json.units.toLocaleString()} {c.impact_json.unit}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="m dim2">revenue</td>
+                          <td className="m strong">
+                            {c.impact_json.revenue != null ? (
+                              money(c.impact_json.revenue)
+                            ) : (
+                              <span className="dim2">not priced &mdash; {c.metric} is a count</span>
+                            )}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="m dim2">direct</td>
+                          <td className="m">{String(c.impact_json.direct)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* The chain, one step per line. Joined with arrows it ran past the panel
+                      edge and the reader lost which multiplication produced the figure. */}
+                  <div className="hd" style={{ margin: '16px 0 8px' }}>
+                    Basis
+                  </div>
+                  {c.impact_json.basis.length ? (
+                    <ol className="basis">
+                      {c.impact_json.basis.map((b, i) => (
+                        <li key={i}>{b}</li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="dim2" style={{ fontSize: 11.5, margin: 0 }}>
+                      Measured directly — no chain of estimates.
+                    </p>
+                  )}
+                </aside>
               </div>
             </div>
           </div>

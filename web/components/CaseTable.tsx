@@ -49,20 +49,23 @@ const impactHint = (c: Case): string =>
       ? 'Measured directly.'
       : `Reached through a chain of estimates: ${c.impact_json.basis.join(' -> ') || 'see the case'}.`;
 
+// Segment is the zero: it absorbs whatever the fixed columns leave, because it is the one
+// cell whose length is not bounded. The rest are sized to their widest real value -- impact
+// at 88px was rendering "20.1k im..." next to 290px of empty segment column.
 const COLS: { w: number; r?: boolean }[] = [
   { w: 3 },
   { w: 34 },
   { w: 120 },
-  { w: 68, r: true },
+  { w: 88, r: true },
   { w: 0 },
   { w: 106 },
   { w: 82, r: true },
-  { w: 82, r: true },
-  { w: 92 },
-  { w: 88, r: true },
+  { w: 94, r: true },
+  { w: 96 },
+  { w: 152, r: true },
   { w: 74, r: true },
   { w: 48, r: true },
-  { w: 118 },
+  { w: 158 },
 ];
 
 export function CaseTable({

@@ -4,7 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { axisValue, metricValue, pct, stamp, ticks } from '@/lib/format';
 import type { Series } from '@/lib/queries';
 
-const H = 132;
+// Floor, not the height. The chart grows into whatever the page has spare, which on a
+// 1080p window is most of it -- 132px of plot under a seven-row table left the band and the
+// line inside a strip too shallow to read a deviation off.
+const H_MIN = 132;
 const PAD = { t: 8, r: 12, b: 20, l: 50 };
 
 const path = (pts: { x: number; y: number }[]) => pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
@@ -18,11 +21,15 @@ export function MetricChart({ series }: { series: Series[] }) {
   // Rendering the SVG at the container's true pixel width keeps the viewBox 1:1.
   // A fixed viewBox with preserveAspectRatio="none" stretched every axis label.
   const [w, setW] = useState(1200);
+  const [H, setH] = useState(H_MIN);
 
   useEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setW(Math.max(320, Math.round(e.contentRect.width))));
+    const ro = new ResizeObserver(([e]) => {
+      setW(Math.max(320, Math.round(e.contentRect.width)));
+      setH(Math.max(H_MIN, Math.round(e.contentRect.height)));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -37,7 +44,7 @@ export function MetricChart({ series }: { series: Series[] }) {
     const x = (i: number) => PAD.l + (i / Math.max(1, points.length - 1)) * (w - PAD.l - PAD.r);
     const y = (v: number) => PAD.t + (1 - (v - min) / (max - min)) * (H - PAD.t - PAD.b);
     return { points, geo: { x, y, min, max } };
-  }, [shape, w]);
+  }, [shape, w, H]);
 
   const obs = points.map((p, i) => ({ x: geo.x(i), y: geo.y(p.observed) }));
   const exp = points.map((p, i) => ({ x: geo.x(i), y: geo.y(p.expected) }));
@@ -54,7 +61,7 @@ export function MetricChart({ series }: { series: Series[] }) {
   const delta = at.expected !== 0 ? (at.observed - at.expected) / at.expected : 0;
 
   return (
-    <div className="panelbox" style={{ marginBottom: 12 }}>
+    <div className="panelbox chartbox">
       <div className="pbhead">
         <span className="hd">Parent series</span>
         <div className="seg" role="group" aria-label="Metric">

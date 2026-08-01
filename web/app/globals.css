@@ -70,7 +70,26 @@ a { color: inherit; }
 }
 .vr { width: 1px; height: 15px; background: var(--line2); flex: none; }
 .body { flex: 1; display: flex; min-height: 0; }
-.wrap { max-width: 1320px; margin: 0 auto; padding: 18px 24px 40px; }
+/* Fills the window rather than sitting in a 1320px column with 300px of margin either side
+   on a normal monitor. The cap is still there, because a table stretched across 2560px puts
+   the metric and its impact half a metre apart, but it is set where lines stop being
+   scannable rather than at the width of a laptop.
+
+   A flex column so the case list can take the space left over. Previously the page was a
+   document that ended wherever the content did, which left 360px of nothing under a
+   seven-row table -- and the same table would push the filters off-screen once a run
+   produced forty rows. */
+.wrap {
+  max-width: 1800px; margin: 0 auto; padding: 18px 24px 20px;
+  min-height: 100%; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.wrap > .kpis, .wrap > .strip { margin-bottom: 0; }
+
+/* The list takes the remaining height and scrolls inside itself, so the header row and the
+   filters above it stay put. Below the min-height the outer scroller takes over, which is
+   what keeps this usable on a short window rather than crushing the table to nothing. */
+.wrap > .tblbox { flex: 1 1 auto; min-height: 170px; overflow: auto; }
 .status {
   height: 26px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 12px;
   background: var(--panel); border-top: 1px solid var(--line); overflow: hidden;
@@ -170,6 +189,15 @@ a.kpi:hover { border-color: var(--line2); }
 .readout .big { font: 600 24px/1 var(--mono); letter-spacing: -0.02em; }
 .chartw { padding: 4px 12px 0; }
 .chartw svg { display: block; }
+
+/* Takes the height the case list does not need. The list keeps its natural height and only
+   scrolls once it would otherwise push the chart below its floor, so a run with seven cases
+   spends the spare pixels on the plot and a run with forty spends them on the rows. */
+/* Between a floor and a ceiling rather than free to grow: given the whole leftover it
+   reached 467px, which spreads three axis labels over half a screen and flattens the line
+   it exists to show. Above the ceiling the height goes to the case list instead. */
+.wrap > .chartbox { flex: 0 1 auto; height: clamp(190px, 30vh, 350px); min-height: 190px; }
+.wrap > .chartbox .chartw { flex: 1 1 auto; min-height: 0; padding-bottom: 4px; }
 .gridline { stroke: var(--grid); stroke-width: 1; }
 .axistx { fill: var(--tx3); font-family: var(--mono); font-size: 10px; }
 .obsline { fill: none; stroke: var(--acc); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
@@ -231,10 +259,31 @@ a.kpi:hover { border-color: var(--line2); }
 @keyframes fade { from { opacity: 0; } }
 .side {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 71;
+  /* Only until the hook reads the stored width on mount; after that it is inline. */
   width: min(1180px, 94vw); display: flex; flex-direction: column;
   background: var(--bg); border-left: 1px solid var(--line2); box-shadow: var(--shadow);
   animation: slide 0.16s ease-out;
 }
+/* Selection off, or dragging across the trace highlights it instead. Deliberately does not
+   touch `animation`: changing that property restarts the entrance keyframes, and their first
+   frame is translateX(24px), so every press slid the panel 24px right and the release landed
+   on the scrim behind it -- a double-click closed the case instead of resetting the width.
+   The pointer is captured by the handle for the duration, so nothing else needs disabling. */
+.side.dragging { user-select: none; cursor: col-resize; }
+
+/* The resize handle. Nine pixels of hit area against a one-pixel visible line, because a
+   border-width target is a test of aim rather than a control. */
+.sgrip {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 9px; z-index: 2;
+  cursor: col-resize; background: none; border: 0; touch-action: none;
+}
+.sgrip::after {
+  content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 3px;
+  background: var(--acc); opacity: 0; transition: opacity 0.12s;
+}
+.sgrip:hover::after, .sgrip:focus-visible::after, .side.dragging .sgrip::after { opacity: 0.55; }
+.sgrip:focus-visible { outline: none; }
+@media (prefers-reduced-motion: reduce) { .sgrip::after { transition: none; } }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
 .shead { flex: none; padding: 12px 16px 0; border-bottom: 1px solid var(--line); background: var(--panel); }
 .stop { display: flex; align-items: flex-start; gap: 12px; }
@@ -263,7 +312,15 @@ a.kpi:hover { border-color: var(--line2); }
 .stabs button:hover { color: var(--tx); }
 .stabs button.on { color: var(--tx); border-bottom-color: var(--acc); font-weight: 500; }
 .sbody { flex: 1; min-height: 0; display: flex; }
-.tcol { width: 460px; flex: none; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+/* Shares the panel instead of holding 460px of it. Span names are the longest strings in
+   the product -- temporal:clicks:campaign_type|device_model -- and they were ellipsed at a
+   fixed width while the detail beside them had room to spare. Now the reader's drag on the
+   panel edge widens the tree too. */
+.tcol {
+  width: clamp(400px, 46%, 760px); flex: none;
+  border-right: 1px solid var(--line); background: var(--panel);
+  display: flex; flex-direction: column; min-height: 0;
+}
 .dcol { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .colhd {
   flex: none; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px;
@@ -304,14 +361,16 @@ a.kpi:hover { border-color: var(--line2); }
 .kinds i { width: 7px; height: 7px; border-radius: 2px; flex: none; }
 
 /* ---------- node detail: one node, not twenty-three ---------- */
-.nd { padding: 14px 16px 40px; max-width: 840px; }
+/* No cap. This is a two-column layout already -- tree on the left, detail on the right --
+   so the detail column is bounded by the tree beside it, not by a number here. */
+.nd { padding: 14px 18px 40px; }
 .ndh { display: flex; align-items: baseline; gap: 9px; margin-bottom: 12px; flex-wrap: wrap; }
 .ndh .k { font-size: 10px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--tx3); font-weight: 600; }
 .ndh .n { font: 600 13px var(--mono); color: var(--tx); }
 .ndh .t { margin-left: auto; font: 10px var(--mono); color: var(--tx3); }
 .ndrow { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 12px; margin-bottom: 11px; align-items: baseline; }
 .ndrow > .k { font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--tx3); font-weight: 600; }
-.ndrow > .v { font-size: 12px; color: var(--tx); line-height: 1.6; }
+.ndrow > .v { font-size: 12px; color: var(--tx); line-height: 1.6; max-width: 92ch; }
 .sql {
   background: var(--codebg); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px;
   overflow-x: auto; font: 11px/1.6 var(--mono); color: var(--tx2); white-space: pre;
@@ -325,7 +384,13 @@ a.kpi:hover { border-color: var(--line2); }
 .attr .v { color: var(--tx2); }
 
 /* ---------- evidence / narrative ---------- */
-.pane { padding: 14px 16px 40px; display: flex; flex-direction: column; gap: 16px; max-width: 1000px; }
+.pane {
+  padding: 14px 18px 40px; display: flex; flex-direction: column; gap: 16px;
+  /* Queried by the narrative grid below. The panel is resizable, so the breakpoint has to
+     respond to this element's width and not the window's -- a media query would go
+     two-column on a wide monitor even when the reader had dragged the panel narrow. */
+  container-type: inline-size;
+}
 .sec { display: flex; flex-direction: column; gap: 8px; }
 .sechd { display: flex; align-items: baseline; gap: 9px; }
 .gates { font: 11px var(--mono); color: var(--tx2); }
@@ -337,7 +402,7 @@ a.kpi:hover { border-color: var(--line2); }
 /* 66ch is the readable measure for continuous prose. The old 720px let a line run past 110
    characters, which is where the eye starts losing its place returning to the left margin --
    and this text is dense enough already without making it hard to track. */
-.narbody { font-size: 13px; line-height: 1.75; color: var(--tx); max-width: 66ch; }
+.narbody { font-size: 13px; line-height: 1.75; color: var(--tx); max-width: 76ch; }
 .narbody p { margin: 0 0 0.95em; }
 .narbody p:last-child { margin-bottom: 0; }
 
@@ -612,11 +677,11 @@ html { scrollbar-color: var(--scroll) transparent; }
 .sbody.one { display: flex; }
 .sbody.one .dcol { flex: 1; min-width: 0; }
 
-.recs { max-width: 780px; }
+.recs { max-width: 1100px; }
 .recbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .recprov { font-size: 11.5px; color: var(--tx2); }
 .recprov b { color: var(--tx); font-weight: 600; }
-.recsum { font-size: 12.5px; line-height: 1.7; color: var(--tx2); margin: 0 0 16px; max-width: 66ch; }
+.recsum { font-size: 12.5px; line-height: 1.7; color: var(--tx2); margin: 0 0 16px; max-width: 80ch; }
 
 .reclist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .rec {
@@ -666,3 +731,35 @@ html { scrollbar-color: var(--scroll) transparent; }
    tell that from waiting on something that is never coming. */
 .aitog .lbl .n.busy { display: inline-flex; align-items: center; gap: 4px; }
 .spin.xs { width: 8px; height: 8px; border-width: 1.5px; margin-top: 0; }
+
+/* ---------------------------------------------------------- narrative two-column
+
+   Prose keeps its measure; the figures it should be checked against sit beside it instead of
+   below a column of empty panel. Single column until the panel is wide enough for both. */
+.nargrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+.narmain { min-width: 0; }
+.naraside { min-width: 0; }
+
+@container (min-width: 880px) {
+  /* Prose takes the slack, the rail stays a rail. Sizing the rail as 1fr handed a
+     three-row table 865px of the panel and squeezed the sentences into a column narrower
+     than the figures beside them. */
+  .nargrid { grid-template-columns: minmax(0, 1fr) minmax(250px, 340px); gap: 36px; }
+  /* Sticks while the narrative scrolls: the impact figures are the reference, and a reference
+     that scrolls away has to be scrolled back to. */
+  .naraside { position: sticky; top: 0; }
+}
+
+.basis { margin: 0; padding: 0; list-style: none; counter-reset: b; }
+.basis li {
+  position: relative; padding-left: 20px; margin-bottom: 7px;
+  font-size: 11.5px; line-height: 1.6; color: var(--tx2);
+}
+.basis li:last-child { margin-bottom: 0; }
+.basis li::before {
+  counter-increment: b; content: counter(b);
+  position: absolute; left: 0; top: 1px;
+  width: 14px; height: 14px; border-radius: 3px; display: grid; place-items: center;
+  background: var(--panel2); border: 1px solid var(--line);
+  font: 500 9px/1 var(--mono); color: var(--tx3);
+}

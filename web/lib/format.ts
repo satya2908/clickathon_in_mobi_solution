@@ -20,7 +20,10 @@ export const count = (n: number) => {
   const a = Math.abs(n);
   if (a >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (a >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return `${n}`;
+  // Expected values are model output and arrive fractional, so an unrounded template
+  // printed a forecast of 173 clicks as 173.00008342316 and overran the column. Counts of
+  // things are whole; only the small ones keep a decimal, where it carries information.
+  return a >= 10 ? `${Math.round(n)}` : `${Number(n.toFixed(1))}`;
 };
 
 export const metricValue = (m: Metric, v: number) => {
