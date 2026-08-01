@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 
 from .db import ClickHouse
 from .metrics import Metric
-from .schema import GRAINS, TOTAL_COMBO
+from .schema import GRAINS, LATTICE_DEPTH, TOTAL_COMBO
 
 _GRAIN_DELTA = {"5m": timedelta(minutes=5), "1h": timedelta(hours=1), "1d": timedelta(days=1)}
 
@@ -142,18 +142,44 @@ class Counters:
         )
 
     def __sub__(self, other: Counters) -> Counters:
-        """Counterfactual removal of a segment.
+        """Counterfactual removal of a segment, refusing rather than clamping.
 
-        Results are clamped at zero. A negative counter can only arise from asking for a
-        counterfactual the lattice cannot express, and a negative request count propagating
-        into a rate would produce a plausible-looking number with no meaning at all.
+        A negative counter means the subtrahend was not contained in the minuend, so the
+        counterfactual is not one the lattice can express. That happens for real: two
+        expectations averaged over different sets of baseline weeks are not nested even when
+        the segments are.
+
+        Treating the fields as independent is worse than useless here, because they are the
+        numerators and denominators of each other. (1000 req, 800 fills) - (900 req, 100 fills)
+        leaves (100, 700), in which no field is negative and the fill rate is 700%: impossible,
+        silently wrong, and precise enough to look deliberate. So the test is not
+        non-negativity but funnel coherence -- see `coherent`.
+
+        An incoherent result collapses to empty, which `value` reports as None for any rate
+        metric, and every caller already handles None by declining to draw a conclusion.
         """
-        return Counters(
-            max(0, self.requests - other.requests),
-            max(0, self.fills - other.fills),
-            max(0, self.impressions - other.impressions),
-            max(0, self.clicks - other.clicks),
-            max(0.0, self.revenue - other.revenue),
+        out = Counters(
+            self.requests - other.requests,
+            self.fills - other.fills,
+            self.impressions - other.impressions,
+            self.clicks - other.clicks,
+            self.revenue - other.revenue,
+        )
+        return out if out.coherent else Counters()
+
+    @property
+    def coherent(self) -> bool:
+        """Whether these counters describe a population that could exist.
+
+        Every event is a request; a filled request may yield one impression; an impression may
+        yield one click. So requests >= fills >= impressions >= clicks holds in any real
+        population, and every rate in config/metrics.yaml is a ratio across adjacent stages of
+        it. A tuple violating the ordering has no interpretation -- it is not an unusual
+        segment, it is not a segment at all.
+        """
+        return (
+            self.requests >= self.fills >= self.impressions >= self.clicks >= 0
+            and self.revenue >= 0.0
         )
 
     @property
@@ -181,6 +207,51 @@ class Counters:
         if den == 0:
             return None
         return (num / den) * metric.scale
+
+
+class ComboNotStored(LookupError):
+    """A combo was requested from a grain that does not materialize it."""
+
+
+def _require_stored(combo: str, window: Window) -> list[str]:
+    """Split a combo into its dimensions, refusing one the grain does not carry.
+
+    Grains store different lattice depths: five-minute rollups carry one-way cells only, while
+    hourly and daily carry pairs. A query for a pair against the five-minute table is perfectly
+    valid SQL and returns nothing, which every caller reads as "no such segment moved" rather
+    than "this was never looked at". A detector reports a clean grid it never saw; a localizer
+    drops the children that would have refuted its accusation. Both are silent, and both are
+    wrong in the direction of unwarranted confidence, so this raises instead.
+    """
+    if combo == TOTAL_COMBO:
+        return []
+    dims = combo.split("|")
+    stored = LATTICE_DEPTH.get(window.grain, 2)
+    if len(dims) > stored:
+        raise ComboNotStored(
+            f"combo {combo!r} is {len(dims)} deep but grain {window.grain!r} materializes "
+            f"depth {stored}. Query a coarser grain, or raise LATTICE_DEPTH[{window.grain!r}] "
+            f"and reload."
+        )
+    return dims
+
+
+def subtract(minuend: Counters, subtrahend: Counters) -> Counters | None:
+    """Counterfactual removal that says so when it cannot be done.
+
+    ``Counters.__sub__`` collapses an inexpressible removal to empty, which `value` reports as
+    None for every rate metric. Revenue has no denominator, so the same collapse reads as a
+    genuine zero instead. Call this wherever the difference between "the remainder is zero" and
+    "there is no remainder to speak of" changes a verdict.
+    """
+    out = Counters(
+        minuend.requests - subtrahend.requests,
+        minuend.fills - subtrahend.fills,
+        minuend.impressions - subtrahend.impressions,
+        minuend.clicks - subtrahend.clicks,
+        minuend.revenue - subtrahend.revenue,
+    )
+    return out if out.coherent else None
 
 
 COUNTER_COLUMNS = ("requests", "fills", "impressions", "clicks", "revenue")
@@ -227,7 +298,7 @@ class RollupReader:
 
     def slice(self, combo: str, window: Window) -> dict[Segment, Counters]:
         """Every occupied cell of one combo over one window."""
-        dims = combo.split("|") if combo != TOTAL_COMBO else []
+        dims = _require_stored(combo, window)
         rows = self.ch.query(
             f"""SELECT key_a, key_b, {_SUMS} FROM {window.table}
                 WHERE combo = {{combo:String}} AND bucket >= {{s:DateTime}} AND bucket < {{e:DateTime}}
@@ -256,7 +327,7 @@ class RollupReader:
         are read from a single consistent snapshot of the table -- a merge landing between two
         separate reads would shift the baseline underneath the observation.
         """
-        dims = combo.split("|") if combo != TOTAL_COMBO else []
+        dims = _require_stored(combo, window)
         rows = self.ch.query(
             f"""SELECT w, key_a, key_b, {_SUMS}
                 FROM (

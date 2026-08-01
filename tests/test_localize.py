@@ -22,14 +22,16 @@ from verdict.localize import (
     maximality_check,
     minimality_check,
     sufficiency_check,
+    trim_mask,
 )
 from verdict.metrics import MetricRegistry
-from verdict.query import Counters, Segment, Window
+from verdict.query import Counters, Segment, Window, subtract
 from verdict.stats import TestResult
 
 METRICS_PATH = Path(__file__).resolve().parents[1] / "config" / "metrics.yaml"
 REGISTRY = MetricRegistry.load(METRICS_PATH)
 FILL_RATE = REGISTRY.metric("fill_rate")
+CTR = REGISTRY.metric("ctr")
 
 WINDOW = Window(datetime(2026, 6, 23), datetime(2026, 6, 26), "1d")
 
@@ -178,20 +180,137 @@ class TestExpectedCounters:
         baseline = counters(20_000, BASE_RATE)
         assert expected_counters([baseline] * 4) == baseline
 
-    def test_every_counter_is_trimmed_on_the_same_week(self):
-        """Dropping week two from requests and week four from fills would produce an expected
-        fill rate that no week actually had."""
+    def test_every_counter_is_averaged_over_the_same_weeks(self):
+        """Taking requests from one set of weeks and fills from another would produce an
+        expected fill rate that no week actually had."""
         history = [
             counters(1_000, 0.80),
             counters(1_000, 0.79),
             counters(1_000, 0.81),
             counters(1_000, 0.20),  # contaminated
         ]
-        result = expected_counters(history)
+        result = expected_counters(history, trim_mask(history, FILL_RATE))
         assert result.value(FILL_RATE) == pytest.approx(0.80, abs=0.01)
 
     def test_empty_history_is_empty(self):
         assert expected_counters([]) == Counters()
+
+
+class TestTrimMask:
+    def test_drops_the_single_week_furthest_from_the_median(self):
+        history = [counters(1_000, r) for r in (0.80, 0.79, 0.81, 0.20)]
+        assert trim_mask(history, FILL_RATE) == (0, 1, 2)
+
+    def test_keeps_everything_when_no_week_is_contaminated(self):
+        history = [counters(1_000, r) for r in (0.80, 0.79, 0.81, 0.80)]
+        assert len(trim_mask(history, FILL_RATE)) == 3  # one is always dropped when trimming
+
+    def test_refuses_to_trim_below_three_weeks(self):
+        """Dropping one of two leaves a single sample, which is not a baseline."""
+        history = [counters(1_000, 0.80), counters(1_000, 0.20)]
+        assert trim_mask(history, FILL_RATE) == (0, 1)
+
+    def test_excludes_weeks_with_no_traffic_in_the_metric_denominator(self):
+        history = [counters(1_000, 0.80), Counters(), counters(1_000, 0.79), counters(1_000, 0.81)]
+        assert 1 not in trim_mask(history, FILL_RATE)
+
+    def test_trims_on_the_metric_under_investigation_not_fill_rate(self):
+        """The defect this replaced hardcoded fills/requests regardless of the metric, so a CTR
+        case discarded whichever week was odd for a quantity nobody had asked about -- while
+        leaving in the week that actually distorted the CTR baseline.
+
+        Week 1 is the CTR outlier and week 3 the fill-rate outlier. Trimming for CTR must drop
+        week 1, which a fill-rate criterion would have kept.
+        """
+        history = [
+            Counters(requests=1_000, fills=800, impressions=800, clicks=80),
+            Counters(requests=1_000, fills=800, impressions=800, clicks=8),  # CTR outlier
+            Counters(requests=1_000, fills=800, impressions=800, clicks=80),
+            Counters(requests=1_000, fills=200, impressions=200, clicks=20),  # fill-rate outlier
+        ]
+        assert trim_mask(history, CTR) == (0, 2, 3)
+        assert trim_mask(history, FILL_RATE) == (0, 1, 2)
+
+
+class TestCounterfactualsStayNested:
+    """The defect that motivated the shared mask.
+
+    Trim was chosen per segment, so a parent could drop week two while a candidate dropped week
+    four. `parent_expected - candidate_expected` then subtracted quantities averaged over
+    different weeks, nothing forced the candidate's requests below the parent's, and the old
+    per-field clamp turned the negative result into a rate outside [0, 1] -- a confident,
+    precise, meaningless verdict with no error raised anywhere.
+    """
+
+    def _world(self):
+        """Parent = child + sibling, built additively so containment holds every week.
+
+        The child has a bad week 3; the sibling has a bad week 1. Because the sibling is the
+        larger of the two, the parent's own worst week is week 1 -- so the parent and the child
+        disagree about which week to discard, which is the whole setup.
+
+        The sibling's fill rate over weeks 0, 2 and 3 is exactly 0.80, and that is the number a
+        correct counterfactual has to recover when the child is removed from the parent.
+        """
+        child = [counters(100, r) for r in (0.80, 0.80, 0.80, 0.20)]
+        sibling = [counters(900, r) for r in (0.80, 0.20, 0.80, 0.80)]
+        parent = [c + s for c, s in zip(child, sibling, strict=True)]
+        return parent, child
+
+    def test_the_two_masks_really_do_diverge(self):
+        parent, child = self._world()
+        assert trim_mask(parent, FILL_RATE) == (0, 2, 3)
+        assert trim_mask(child, FILL_RATE) == (0, 1, 2)
+
+    def test_a_shared_mask_recovers_the_sibling_rate_exactly(self):
+        parent, child = self._world()
+        mask = trim_mask(parent, FILL_RATE)
+        remainder = subtract(expected_counters(parent, mask), expected_counters(child, mask))
+        assert remainder is not None
+        assert remainder.value(FILL_RATE) == pytest.approx(0.80, abs=1e-9)
+
+    def test_per_segment_masks_get_the_wrong_answer(self):
+        """The defect, as a number rather than an exception.
+
+        Nothing raises and nothing looks odd -- the counterfactual is simply 2.2 points off,
+        because the parent's expectation excludes week 1 while the child's includes it. A
+        sufficiency score built on this is precise and wrong, which is the failure mode that
+        matters most for something calling itself a root-cause analyst.
+        """
+        parent, child = self._world()
+        p = expected_counters(parent, trim_mask(parent, FILL_RATE))
+        c = expected_counters(child, trim_mask(child, FILL_RATE))
+        remainder = subtract(p, c)
+        assert remainder is not None
+        assert remainder.value(FILL_RATE) == pytest.approx(0.7778, abs=1e-4)
+
+    def test_subtraction_refuses_rather_than_manufacturing_an_impossible_rate(self):
+        """The reviewer's example. (1000 req, 800 fills) - (900 req, 100 fills) is (100, 700),
+        in which no field is negative and the fill rate is 700%. Non-negativity is not the
+        invariant; funnel coherence is."""
+        minuend = Counters(requests=1_000, fills=800)
+        subtrahend = Counters(requests=900, fills=100)
+        naive = Counters(requests=100, fills=700)
+        assert naive.value(FILL_RATE) == pytest.approx(7.0)  # what per-field clamping produced
+
+        assert subtract(minuend, subtrahend) is None
+        assert (minuend - subtrahend) == Counters()
+        assert (minuend - subtrahend).value(FILL_RATE) is None
+
+    def test_coherence_follows_the_funnel_not_just_the_sign(self):
+        assert Counters(requests=100, fills=80, impressions=60, clicks=6).coherent
+        assert not Counters(requests=100, fills=700).coherent
+        assert not Counters(requests=100, fills=80, impressions=90).coherent
+        assert not Counters(requests=100, fills=80, impressions=60, clicks=61).coherent
+        assert not Counters(requests=-1).coherent
+        assert not Counters(requests=100, fills=80, revenue=-0.01).coherent
+
+    def test_a_genuine_removal_still_subtracts_exactly(self):
+        minuend = Counters(requests=1_000, fills=800, impressions=800, clicks=80)
+        subtrahend = Counters(requests=400, fills=320, impressions=320, clicks=32)
+        out = subtract(minuend, subtrahend)
+        assert out == Counters(requests=600, fills=480, impressions=480, clicks=48)
+        assert out.value(FILL_RATE) == pytest.approx(0.80)
 
 
 class TestSufficiency:

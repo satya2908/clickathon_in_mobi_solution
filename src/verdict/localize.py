@@ -30,15 +30,16 @@ carry. Reporting that as a pass would claim a check was performed that never ran
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
 from .config import DetectionConfig, LocalizationConfig
 from .detect import Finding
 from .metrics import Metric, MetricRegistry
-from .query import Counters, RollupReader, Segment, Window
-from .schema import TOTAL_COMBO
-from .stats import trim_and_pool
+from .query import Counters, RollupReader, Segment, Window, subtract
+from .schema import LATTICE_DEPTH, TOTAL_COMBO
+from .stats import median
 from .trace import Tracer
 
 log = logging.getLogger(__name__)
@@ -137,11 +138,22 @@ class HistoryCache:
         self.window = window
         self.weeks = weeks
         self._cache: dict[str, dict[Segment, list[Counters]]] = {}
+        # Set once per localization from the parent's history, then used for every segment in
+        # it. Holding it here rather than passing it down each call is what makes it impossible
+        # for two segments in the same comparison to be averaged over different weeks.
+        self.mask: tuple[int, ...] | None = None
 
     def combo(self, combo: str) -> dict[Segment, list[Counters]]:
         if combo not in self._cache:
             self._cache[combo] = self.reader.slice_with_history(combo, self.window, self.weeks)
         return self._cache[combo]
+
+    def adopt_mask(self, parent_history: list[Counters], metric: Metric, *, trim: bool) -> None:
+        self.mask = trim_mask(parent_history, metric, trim=trim)
+
+    def expected(self, weeks: list[Counters]) -> Counters:
+        """Expectation for one segment, over the localization's shared set of baseline weeks."""
+        return expected_counters(weeks[1:], self.mask)
 
     def segment(self, segment: Segment) -> tuple[Counters, Counters] | None:
         """Observed and expected counters for one segment."""
@@ -149,7 +161,7 @@ class HistoryCache:
         weeks = cells.get(segment)
         if weeks is None:
             return None
-        return weeks[0], expected_counters(weeks[1:])
+        return weeks[0], self.expected(weeks)
 
     def siblings(self, segment: Segment, dimension: str) -> dict[Segment, list[Counters]]:
         """Cells sharing every key with ``segment`` except the value of ``dimension``."""
@@ -162,29 +174,58 @@ class HistoryCache:
         return out
 
 
-def expected_counters(history: list[Counters], *, trim: bool = True) -> Counters:
+def trim_mask(history: list[Counters], metric: Metric, *, trim: bool = True) -> tuple[int, ...]:
+    """Which baseline weeks to average, as indices into ``history``.
+
+    Chosen once per localization and reused for every segment in it. Choosing per segment is
+    what made the counterfactuals unsound: if the parent drops week two and a candidate drops
+    week four, then `parent_expected - candidate_expected` subtracts quantities averaged over
+    different weeks, and nothing makes the candidate's requests smaller than the parent's. The
+    result is not nested, so the subtraction produces a rate outside [0, 1] -- a confident,
+    precise, meaningless verdict.
+
+    Trimming discards the single week furthest from the median rate. It exists so that one
+    prior incident in the baseline window does not define "normal" as the incident, and one
+    week is the most that can be dropped from four while leaving a median worth the name.
+    """
+    if not history:
+        return ()
+
+    den_field = metric.denominator_field or metric.numerator_field
+    usable = [i for i, c in enumerate(history) if getattr(c, den_field) > 0]
+    if not trim or len(usable) < 3:
+        return tuple(usable)
+
+    # Deliberately the metric under investigation, not fill rate. A CTR case trimmed on fill
+    # rate discards whichever week was odd for a quantity nobody asked about, while leaving in
+    # the week that actually distorts the CTR baseline.
+    rates = [(history[i].value(metric) or 0.0) for i in usable]
+    centre = median(rates)
+    worst = max(range(len(usable)), key=lambda j: abs(rates[j] - centre))
+    return tuple(i for j, i in enumerate(usable) if j != worst)
+
+
+def expected_counters(
+    history: list[Counters], mask: Sequence[int] | None = None, *, trim: bool = True
+) -> Counters:
     """Counters the segment would have carried had nothing changed.
 
-    Each counter is pooled over the surviving weeks and divided by how many survived, giving a
-    per-window expectation directly comparable to the observation. Every counter is trimmed on
-    the same week so the resulting tuple stays internally consistent -- dropping week two from
-    requests and week four from fills would produce an expected fill rate no week ever had.
+    Each counter is pooled over the weeks in ``mask`` and divided by how many there were,
+    giving a per-window expectation directly comparable to the observation. Every counter is
+    averaged over the same weeks, so the resulting tuple stays internally consistent -- taking
+    requests from one set of weeks and fills from another would produce an expected fill rate
+    that no week ever had.
+
+    ``mask`` comes from `trim_mask`, computed once for the whole localization. Passing None
+    falls back to every week with a non-zero request count, which is only correct when the
+    result will not be subtracted from another segment's expectation.
     """
-    usable = [c for c in history if c.requests > 0]
-    if not usable:
-        return Counters()
-
-    rates = [(c.requests, c.fills) for c in usable]
-    pooled = trim_and_pool(rates, trim=trim)
-    if pooled.weeks_kept == len(usable) or not trim or len(usable) < 3:
-        keep = usable
+    if mask is None:
+        keep = [c for c in history if c.requests > 0]
     else:
-        ratios = [c.fills / c.requests for c in usable]
-        from .stats import median as _median
-
-        centre = _median(ratios)
-        worst = max(range(len(usable)), key=lambda i: abs(ratios[i] - centre))
-        keep = [c for i, c in enumerate(usable) if i != worst]
+        keep = [history[i] for i in mask if i < len(history)]
+    if not keep:
+        return Counters()
 
     n = len(keep)
     total = Counters()
@@ -226,8 +267,19 @@ def sufficiency_check(
             "explain. Common when two segments moved in opposite directions and cancelled.",
         )
 
-    residual_obs = _value(parent_obs - candidate.observed, metric)
-    residual_exp = _value(parent_exp - candidate.expected, metric)
+    remainder_obs = subtract(parent_obs, candidate.observed)
+    remainder_exp = subtract(parent_exp, candidate.expected)
+    if remainder_obs is None or remainder_exp is None:
+        return Check(
+            "sufficiency",
+            "unknown",
+            None,
+            "This candidate is not contained in the parent for every counter, so removing it "
+            "is not a counterfactual the lattice can express.",
+        )
+
+    residual_obs = _value(remainder_obs, metric)
+    residual_exp = _value(remainder_exp, metric)
     if residual_obs is None or residual_exp is None:
         return Check(
             "sufficiency",
@@ -292,9 +344,13 @@ def minimality_check(
         for child, weeks in history.combo(combo).items():
             if child.as_dict().get(dimension) != candidate.segment.as_dict()[dimension]:
                 continue
-            child_obs, child_exp = weeks[0], expected_counters(weeks[1:])
-            remainder_obs = _value(candidate.observed - child_obs, metric)
-            remainder_exp = _value(candidate.expected - child_exp, metric)
+            child_obs, child_exp = weeks[0], history.expected(weeks)
+            without_obs = subtract(candidate.observed, child_obs)
+            without_exp = subtract(candidate.expected, child_exp)
+            if without_obs is None or without_exp is None:
+                continue
+            remainder_obs = _value(without_obs, metric)
+            remainder_exp = _value(without_exp, metric)
             if remainder_obs is None or remainder_exp is None:
                 continue
             tested += 1
@@ -365,7 +421,7 @@ def maximality_check(
         agreeing = 0
         considered = 0
         for weeks in siblings.values():
-            sib_obs, sib_exp = weeks[0], expected_counters(weeks[1:])
+            sib_obs, sib_exp = weeks[0], history.expected(weeks)
             obs_v, exp_v = _value(sib_obs, metric), _value(sib_exp, metric)
             if obs_v is None or exp_v is None or not exp_v:
                 continue
@@ -427,7 +483,11 @@ def holdout_check(
         history = [
             reader.segment(candidate.segment, part.shifted(w)) for w in range(1, weeks + 1)
         ]
-        exp = expected_counters(history)
+        # Trimmed on its own history rather than the localization's shared mask. This compares
+        # one segment against itself over half-windows, so no cross-segment subtraction happens
+        # and nesting is not at stake; and a week that was atypical across the whole window is
+        # not necessarily atypical in each half.
+        exp = expected_counters(history, trim_mask(history, metric, trim=True))
         obs_v, exp_v = _value(observed, metric), _value(exp, metric)
         if obs_v is None or exp_v is None or not exp_v:
             return None
@@ -510,8 +570,13 @@ class Localizer:
                 note="No total-level rollup rows exist for this window.",
             )
 
+        # The trim decision is made here, once, from the parent's history and the metric under
+        # investigation, and every expectation in this localization then uses it. Deciding it
+        # per segment lets the parent and a candidate average over different weeks, which
+        # breaks the containment that `parent_expected - candidate_expected` relies on.
         parent_obs = parent_weeks[0]
-        parent_exp = expected_counters(parent_weeks[1:])
+        history.adopt_mask(parent_weeks[1:], metric, trim=self.detection.trim_extremes)
+        parent_exp = history.expected(parent_weeks)
         parent_obs_v = _value(parent_obs, metric)
         parent_exp_v = _value(parent_exp, metric)
         parent_dev = (parent_obs_v or 0.0) - (parent_exp_v or 0.0)
@@ -573,13 +638,17 @@ class Localizer:
         segment that halved is a large relative move and cannot account for a change in the
         total, while a large segment that slipped a few percent can.
         """
-        combos: list[str] = []
-        legal = self.registry.valid_dimensions(metric)
-        combos.extend(sorted(legal))
-        ordered = sorted(legal)
-        for i, a in enumerate(ordered):
-            for b in ordered[i + 1 :]:
-                combos.append(f"{a}|{b}")
+        # Capped at what this grain actually materializes. Enumerating deeper would return
+        # nothing for the missing combos and quietly shrink the candidate set: a one-way segment
+        # that should have failed minimality against its two-way child would be accused instead,
+        # with no gap recorded anywhere to show the child was never considered.
+        depth = min(self.cfg.max_depth, LATTICE_DEPTH.get(finding.window.grain, 2))
+        legal = sorted(self.registry.valid_dimensions(metric))
+        combos: list[str] = list(legal) if depth >= 1 else []
+        if depth >= 2:
+            for i, a in enumerate(legal):
+                for b in legal[i + 1 :]:
+                    combos.append(f"{a}|{b}")
 
         scored: list[tuple[float, Candidate]] = []
         for combo in combos:
@@ -587,7 +656,7 @@ class Localizer:
                 if segment.depth > self.cfg.max_depth:
                     continue
                 observed = weeks[0]
-                expected = expected_counters(weeks[1:])
+                expected = history.expected(weeks)
                 obs_v, exp_v = _value(observed, metric), _value(expected, metric)
                 if obs_v is None or exp_v is None:
                     continue
