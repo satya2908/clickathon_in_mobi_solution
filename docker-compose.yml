@@ -1,0 +1,76 @@
+# Verdict local stack.
+#
+# Analytics data lives in ClickHouse Cloud (set CLICKHOUSE_* in .env). The ClickHouse bundled
+# inside the ClickStack image below is a separate thing entirely: it stores observability data
+# -- the investigation traces -- and never sees an ad event. Keeping them apart is deliberate,
+# because a telemetry backend that shares a cluster with the system it observes stops being
+# useful exactly when that cluster is in trouble.
+
+name: verdict
+
+services:
+  # ClickStack: OpenTelemetry collector, HyperDX UI, and a ClickHouse to hold traces.
+  # Every investigation step arrives here as a span, which is how a reviewer walks what the
+  # analyst did rather than taking the conclusion on faith.
+  clickstack:
+    image: docker.hyperdx.io/hyperdx/hyperdx-all-in-one:2
+    container_name: verdict-clickstack
+    restart: unless-stopped
+    ports:
+      - "${HYPERDX_UI_PORT:-8080}:8080"     # HyperDX UI
+      - "${OTLP_HTTP_PORT:-4318}:4318"      # OTLP/HTTP, what the app exports to
+      - "${OTLP_GRPC_PORT:-4317}:4317"      # OTLP/gRPC
+    environment:
+      FRONTEND_URL: "http://localhost:${HYPERDX_UI_PORT:-8080}"
+    volumes:
+      - clickstack-data:/data/db
+      - clickstack-logs:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  verdict:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: verdict:${VERDICT_TAG:-local}
+    container_name: verdict
+    depends_on:
+      clickstack:
+        condition: service_healthy
+    environment:
+      # Analytics warehouse. Required; there is no default host on purpose.
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
+
+      # Container-to-container, so the service name rather than localhost.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://clickstack:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-verdict}
+      TRACING_ENABLED: ${TRACING_ENABLED:-true}
+
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+
+      VERDICT_DATA_DIR: /data
+      VERDICT_OUTPUT_DIR: /out
+    volumes:
+      # Config as a bind mount mirrors how a ConfigMap behaves in Kubernetes: same path, same
+      # file, replaced from outside without touching the image.
+      - ./config:/etc/verdict:ro
+      - ${DATA_DIR:-./data}:/data:ro
+      - ./out:/out
+    # Long-lived so `docker compose exec verdict verdict <command>` works during a demo.
+    entrypoint: ["sleep", "infinity"]
+
+volumes:
+  clickstack-data:
+  clickstack-logs:

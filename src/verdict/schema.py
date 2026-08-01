@@ -1,0 +1,467 @@
+"""Schema generation.
+
+DDL is generated from the metric registry rather than hand-written, so the rollup lattice can
+never drift out of step with the declared dimensions. Adding a dimension to metrics.yaml
+extends the lattice; hand-written DDL would have silently left a hole that looks like a
+dimension the analyst simply never found anything in.
+
+Storage shape
+-------------
+One rollup table per time grain, holding a 1-way and 2-way *lattice* in long form:
+
+    (bucket, combo, key_a, key_b, requests, fills, impressions, clicks, revenue)
+
+``combo`` names which dimensions a row is keyed by ('region', 'region|os_version', or
+'__all__' for the grand total). This was chosen over a full-grain rollup after measuring both
+on the real dataset: full-grain gives only 1.14x compression at hourly grain here because
+dimension cardinality is high relative to event volume, while the lattice gives 6.4x hourly
+and 150x daily. The lattice cannot answer 3-way questions, which is a known and stated limit.
+
+Only additive counters are stored. Every metric is divided out at read time, so a rollup row
+means the same thing however it is later aggregated.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from itertools import combinations
+
+from .config import Config
+from .metrics import MetricRegistry
+
+TOTAL_COMBO = "__all__"
+
+# How each lattice dimension is resolved from a raw ad_events row. Dictionaries keep the fact
+# table narrow (three id columns instead of nine denormalized strings) while making the join
+# a hash lookup rather than a join.
+_DIM_SOURCE_SQL = {
+    "ad_format": "ad_format",
+    "category": "dictGet('dict_apps', 'category', app_id)",
+    "publisher_tier": "dictGet('dict_apps', 'publisher_tier', app_id)",
+    "vertical": "dictGet('dict_advertisers', 'vertical', advertiser_id)",
+    "campaign_type": "dictGet('dict_advertisers', 'campaign_type', advertiser_id)",
+    "region": "dictGet('dict_geo_device', 'region', geo_device_id)",
+    "country": "dictGet('dict_geo_device', 'country', geo_device_id)",
+    "device_model": "dictGet('dict_geo_device', 'device_model', geo_device_id)",
+    "os_version": "dictGet('dict_geo_device', 'os_version', geo_device_id)",
+}
+
+GRAINS = {
+    "5m": ("rollup_5m", "toStartOfFiveMinutes"),
+    "1h": ("rollup_1h", "toStartOfHour"),
+    "1d": ("rollup_1d", "toStartOfDay"),
+}
+
+
+@dataclass(frozen=True)
+class Statement:
+    name: str
+    sql: str
+
+
+def combos(dims: list[str]) -> list[tuple[str, str | None]]:
+    """The lattice: the grand total, every dimension alone, and every unordered pair."""
+    out: list[tuple[str, str | None]] = [(TOTAL_COMBO, None)]
+    out.extend((d, None) for d in dims)
+    out.extend((a, b) for a, b in combinations(dims, 2))
+    return out
+
+
+def combo_name(a: str, b: str | None) -> str:
+    return a if b is None else f"{a}|{b}"
+
+
+def _combo_array(dims: list[str]) -> str:
+    """The array of (combo, key_a, key_b) tuples fanned out per event.
+
+    One ARRAY JOIN replaces what would otherwise be 46 separate materialized views, which
+    matters for more than tidiness: with 46 views the streaming path and the backfill path
+    are 46 chances to define a bucket boundary slightly differently, and any disagreement
+    shows up in the data as a step change that looks exactly like a real incident.
+    """
+    rows = []
+    for a, b in combos(dims):
+        if a == TOTAL_COMBO:
+            rows.append("    ('__all__', '', '')")
+        elif b is None:
+            rows.append(f"    ('{a}', CAST({_DIM_SOURCE_SQL[a]} AS String), '')")
+        else:
+            rows.append(
+                f"    ('{a}|{b}', CAST({_DIM_SOURCE_SQL[a]} AS String), "
+                f"CAST({_DIM_SOURCE_SQL[b]} AS String))"
+            )
+    return "[\n" + ",\n".join(rows) + "\n  ]"
+
+
+def rollup_select_from_events(dims: list[str], bucket_fn: str, where: str = "") -> str:
+    """The one definition of how raw events become rollup rows.
+
+    Used verbatim by both the materialized view and the historical backfill so the two cannot
+    disagree at the handover boundary.
+    """
+    clause = f"\nWHERE {where}" if where else ""
+    return f"""SELECT
+  {bucket_fn}(event_time)             AS bucket,
+  c.1                                 AS combo,
+  c.2                                 AS key_a,
+  c.3                                 AS key_b,
+  count()                             AS requests,
+  sum(is_filled)                      AS fills,
+  sum(is_impression)                  AS impressions,
+  sum(is_click)                       AS clicks,
+  sum(revenue)                        AS revenue
+FROM ad_events
+ARRAY JOIN {_combo_array(dims)} AS c{clause}
+GROUP BY bucket, combo, key_a, key_b"""
+
+
+def rollup_select_from_rollup(source: str, bucket_fn: str, where: str = "") -> str:
+    """Coarser grains re-aggregate the finer table.
+
+    Safe on a SummingMergeTree source even though a view sees pre-merge blocks: the blocks are
+    partial sums, and a sum of partial sums is the total.
+    """
+    clause = f"\nWHERE {where}" if where else ""
+    return f"""SELECT
+  {bucket_fn}(bucket)   AS bucket,
+  combo,
+  key_a,
+  key_b,
+  sum(requests)         AS requests,
+  sum(fills)            AS fills,
+  sum(impressions)      AS impressions,
+  sum(clicks)           AS clicks,
+  sum(revenue)          AS revenue
+FROM {source}{clause}
+GROUP BY bucket, combo, key_a, key_b"""
+
+
+def _ttl(days: int, column: str, enforce: bool) -> str:
+    return f"\nTTL {column} + INTERVAL {days} DAY DELETE" if enforce else ""
+
+
+def dimension_ddl() -> list[Statement]:
+    stmts = [
+        Statement(
+            "dim_apps",
+            """CREATE TABLE IF NOT EXISTS dim_apps (
+  app_id          String,
+  category        LowCardinality(String),
+  publisher_tier  LowCardinality(String)
+) ENGINE = MergeTree ORDER BY app_id""",
+        ),
+        Statement(
+            "dim_advertisers",
+            """CREATE TABLE IF NOT EXISTS dim_advertisers (
+  advertiser_id  String,
+  vertical       LowCardinality(String),
+  campaign_type  LowCardinality(String)
+) ENGINE = MergeTree ORDER BY advertiser_id""",
+        ),
+        Statement(
+            "dim_geo_device",
+            """CREATE TABLE IF NOT EXISTS dim_geo_device (
+  geo_device_id  String,
+  region         LowCardinality(String),
+  country        LowCardinality(String),
+  device_model   LowCardinality(String),
+  os_version     LowCardinality(String)
+) ENGINE = MergeTree ORDER BY geo_device_id""",
+        ),
+    ]
+    # LIFETIME(0) pins the dictionary: these are static reference tables for the run, and a
+    # background reload mid-investigation would mean two queries in one case file silently
+    # resolved the same id differently.
+    stmts += [
+        Statement(
+            "dict_apps",
+            """CREATE DICTIONARY IF NOT EXISTS dict_apps (
+  app_id          String,
+  category        String,
+  publisher_tier  String
+)
+PRIMARY KEY app_id
+SOURCE(CLICKHOUSE(TABLE 'dim_apps'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(0)""",
+        ),
+        Statement(
+            "dict_advertisers",
+            """CREATE DICTIONARY IF NOT EXISTS dict_advertisers (
+  advertiser_id  String,
+  vertical       String,
+  campaign_type  String
+)
+PRIMARY KEY advertiser_id
+SOURCE(CLICKHOUSE(TABLE 'dim_advertisers'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(0)""",
+        ),
+        Statement(
+            "dict_geo_device",
+            """CREATE DICTIONARY IF NOT EXISTS dict_geo_device (
+  geo_device_id  String,
+  region         String,
+  country        String,
+  device_model   String,
+  os_version     String
+)
+PRIMARY KEY geo_device_id
+SOURCE(CLICKHOUSE(TABLE 'dim_geo_device'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(0)""",
+        ),
+    ]
+    return stmts
+
+
+def fact_ddl(cfg: Config) -> list[Statement]:
+    ttl = _ttl(cfg.retention.raw_events_days, "event_time", cfg.retention.enforce)
+    return [
+        Statement(
+            "ad_events",
+            f"""CREATE TABLE IF NOT EXISTS ad_events (
+  event_time     DateTime64(3, 'UTC') CODEC(Delta(8), ZSTD(1)),
+  app_id         LowCardinality(String),
+  geo_device_id  LowCardinality(String),
+  advertiser_id  LowCardinality(String),
+  ad_format      LowCardinality(String),
+  is_filled      UInt8  CODEC(ZSTD(1)),
+  is_impression  UInt8  CODEC(ZSTD(1)),
+  is_click       UInt8  CODEC(ZSTD(1)),
+  revenue        Float64 CODEC(ZSTD(1))
+)
+ENGINE = MergeTree
+PARTITION BY toDate(event_time)
+ORDER BY (event_time, app_id){ttl}""",
+        )
+    ]
+
+
+def rollup_ddl(cfg: Config) -> list[Statement]:
+    stmts: list[Statement] = []
+    ttl_days = {
+        "5m": cfg.retention.rollup_5m_days,
+        "1h": cfg.retention.rollup_1h_days,
+        "1d": cfg.retention.rollup_1d_days,
+    }
+    for grain, (table, _) in GRAINS.items():
+        partition = "toDate(bucket)" if grain == "5m" else "toYYYYMM(bucket)"
+        ttl = _ttl(ttl_days[grain], "bucket", cfg.retention.enforce)
+        stmts.append(
+            Statement(
+                table,
+                f"""CREATE TABLE IF NOT EXISTS {table} (
+  bucket       DateTime('UTC') CODEC(DoubleDelta, ZSTD(1)),
+  combo        LowCardinality(String),
+  key_a        LowCardinality(String),
+  key_b        LowCardinality(String),
+  requests     UInt64  CODEC(T64, ZSTD(1)),
+  fills        UInt64  CODEC(T64, ZSTD(1)),
+  impressions  UInt64  CODEC(T64, ZSTD(1)),
+  clicks       UInt64  CODEC(T64, ZSTD(1)),
+  revenue      Float64 CODEC(ZSTD(1))
+)
+ENGINE = SummingMergeTree((requests, fills, impressions, clicks, revenue))
+PARTITION BY {partition}
+ORDER BY (combo, bucket, key_a, key_b){ttl}""",
+            )
+        )
+    return stmts
+
+
+def view_ddl(dims: list[str]) -> list[Statement]:
+    """Materialized views for the live path.
+
+    These cover events arriving after load. History is backfilled explicitly with the same
+    SELECT, because a view only ever fires on new inserts.
+    """
+    stmts = [
+        Statement(
+            "mv_events_to_5m",
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_events_to_5m TO rollup_5m AS\n"
+            + rollup_select_from_events(dims, "toStartOfFiveMinutes"),
+        ),
+        Statement(
+            "mv_5m_to_1h",
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_5m_to_1h TO rollup_1h AS\n"
+            + rollup_select_from_rollup("rollup_5m", "toStartOfHour"),
+        ),
+        Statement(
+            "mv_1h_to_1d",
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_1h_to_1d TO rollup_1d AS\n"
+            + rollup_select_from_rollup("rollup_1h", "toStartOfDay"),
+        ),
+    ]
+    return stmts
+
+
+def results_ddl(cfg: Config) -> list[Statement]:
+    """Tables holding what the analyst concluded.
+
+    Cases are kept far longer than the events that produced them: a closed case is a few
+    kilobytes, and recognising that today's incident is a repeat of one from eight months ago
+    is worth more than the raw rows ever were.
+    """
+    ttl = _ttl(cfg.retention.cases_days, "detected_at", cfg.retention.enforce)
+    return [
+        Statement(
+            "cases",
+            f"""CREATE TABLE IF NOT EXISTS cases (
+  case_id         String,
+  run_id          String,
+  detected_at     DateTime('UTC'),
+  metric          LowCardinality(String),
+  grain           LowCardinality(String),
+  window_start    DateTime('UTC'),
+  window_end      DateTime('UTC'),
+  direction       LowCardinality(String),
+  observed        Float64,
+  expected        Float64,
+  relative_effect Float64,
+  p_value         Float64,
+  dispersion      Float64,
+  verdict_kind    LowCardinality(String),
+  segment         String,
+  segment_json    String,
+  confidence      Float64,
+  confidence_json String,
+  gates_json      String,
+  impact_json     String,
+  narrative       String,
+  narrative_source LowCardinality(String),
+  fingerprint     String,
+  trace_id        String,
+  recurrence_of   String
+)
+ENGINE = ReplacingMergeTree(detected_at)
+PARTITION BY toYYYYMM(detected_at)
+ORDER BY (case_id){ttl}""",
+        ),
+        Statement(
+            "case_candidates",
+            """CREATE TABLE IF NOT EXISTS case_candidates (
+  case_id        String,
+  candidate      String,
+  candidate_json String,
+  depth          UInt8,
+  observed       Float64,
+  expected       Float64,
+  predicted      Float64,
+  residual       Float64,
+  sufficiency    Float64,
+  minimality     Float64,
+  maximality     Float64,
+  holdout        Float64,
+  p_value        Float64,
+  status         LowCardinality(String),
+  reason         String
+)
+ENGINE = MergeTree
+ORDER BY (case_id, status, candidate)""",
+        ),
+        Statement(
+            "case_steps",
+            """CREATE TABLE IF NOT EXISTS case_steps (
+  case_id     String,
+  step_id     String,
+  parent_id   String,
+  ordinal     UInt16,
+  name        String,
+  kind        LowCardinality(String),
+  what        String,
+  why         String,
+  result      String,
+  sql         String,
+  duration_ms UInt32,
+  span_id     String
+)
+ENGINE = MergeTree
+ORDER BY (case_id, ordinal)""",
+        ),
+        Statement(
+            "coverage_ledger",
+            """CREATE TABLE IF NOT EXISTS coverage_ledger (
+  run_id       String,
+  metric       LowCardinality(String),
+  grain        LowCardinality(String),
+  window_start DateTime('UTC'),
+  combo        LowCardinality(String),
+  key_a        String,
+  key_b        String,
+  denominator  UInt64,
+  required     UInt64,
+  reason       LowCardinality(String)
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (run_id, metric, combo, key_a, key_b)""",
+        ),
+        Statement(
+            "feedback",
+            """CREATE TABLE IF NOT EXISTS feedback (
+  case_id     String,
+  labelled_at DateTime('UTC') DEFAULT now(),
+  label       LowCardinality(String),
+  note        String,
+  operator    String
+)
+ENGINE = ReplacingMergeTree(labelled_at)
+ORDER BY (case_id)""",
+        ),
+        Statement(
+            "runs",
+            """CREATE TABLE IF NOT EXISTS runs (
+  run_id      String,
+  started_at  DateTime('UTC'),
+  finished_at DateTime('UTC'),
+  config_json String,
+  git_sha     String,
+  trace_id    String,
+  cases_found UInt32,
+  status      LowCardinality(String),
+  note        String
+)
+ENGINE = ReplacingMergeTree(started_at)
+ORDER BY (run_id)""",
+        ),
+    ]
+
+
+def all_statements(cfg: Config, registry: MetricRegistry) -> list[Statement]:
+    dims = registry.lattice_dimensions
+    unknown = [d for d in dims if d not in _DIM_SOURCE_SQL]
+    if unknown:
+        raise ValueError(
+            f"Lattice dimension(s) {unknown} have no source expression in schema.py. "
+            "Add them to _DIM_SOURCE_SQL, or the rollup would silently omit them."
+        )
+    return (
+        dimension_ddl()
+        + fact_ddl(cfg)
+        + rollup_ddl(cfg)
+        + view_ddl(dims)
+        + results_ddl(cfg)
+    )
+
+
+def backfill_statements(dims: list[str], where: str = "") -> list[Statement]:
+    """Populate rollups from already-loaded history, finest grain upward."""
+    rollup_where = where.replace("event_time", "bucket") if where else ""
+    return [
+        Statement(
+            "backfill_5m",
+            "INSERT INTO rollup_5m\n"
+            + rollup_select_from_events(dims, "toStartOfFiveMinutes", where),
+        ),
+        Statement(
+            "backfill_1h",
+            "INSERT INTO rollup_1h\n"
+            + rollup_select_from_rollup("rollup_5m", "toStartOfHour", rollup_where),
+        ),
+        Statement(
+            "backfill_1d",
+            "INSERT INTO rollup_1d\n"
+            + rollup_select_from_rollup("rollup_1h", "toStartOfDay", rollup_where),
+        ),
+    ]

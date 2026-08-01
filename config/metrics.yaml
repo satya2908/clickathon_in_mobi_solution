@@ -1,0 +1,183 @@
+# Metric registry and dimension lattice.
+#
+# Formulas are transcribed verbatim from the hackathon metrics glossary. Every ratio is a
+# sum/sum over the rows in a group, never an average of per-row ratios, so that rollups stay
+# exact under further aggregation.
+#
+# The validity matrix is DERIVED, not hand-written. Each dimension records the funnel stage at
+# which it becomes known, and each metric records the funnel stage of its denominator
+# population. A slice is legal only when stage(dimension) <= stage(metric denominator) -- that
+# is, when every row that the metric counts actually carries the dimension.
+#
+# This matters because advertiser_id is empty on unfilled requests, so `vertical` and
+# `campaign_type` exist only on filled events. Slicing fill rate by campaign_type therefore
+# returns 1.0 for every value: the denominator has silently become "filled requests". A naive
+# scan reports that as a clean, confident, and completely wrong answer.
+
+funnel_stages:
+  request: 0
+  fill: 1
+  impression: 2
+
+metrics:
+  requests:
+    label: Requests
+    kind: count
+    numerator: "count(*)"
+    denominator: null
+    # Counts every row including unfilled, so it needs dimensions known at request time.
+    support: request
+    direction_of_concern: both
+
+  fills:
+    label: Fills
+    kind: count
+    numerator: "sum(is_filled)"
+    denominator: null
+    support: fill
+    direction_of_concern: both
+
+  fill_rate:
+    label: Fill rate
+    kind: rate
+    numerator: "sum(is_filled)"
+    denominator: "count(*)"
+    # Denominator is all requests, so post-fill dimensions are illegal here.
+    support: request
+    direction_of_concern: both
+    is_proportion: true
+
+  impressions:
+    label: Impressions
+    kind: count
+    numerator: "sum(is_impression)"
+    denominator: null
+    support: impression
+    direction_of_concern: both
+
+  render_rate:
+    label: Render rate
+    kind: rate
+    numerator: "sum(is_impression)"
+    denominator: "sum(is_filled)"
+    support: fill
+    direction_of_concern: both
+    is_proportion: true
+
+  clicks:
+    label: Clicks
+    kind: count
+    numerator: "sum(is_click)"
+    denominator: null
+    support: impression
+    direction_of_concern: both
+
+  ctr:
+    label: CTR
+    kind: rate
+    numerator: "sum(is_click)"
+    denominator: "sum(is_impression)"
+    support: impression
+    direction_of_concern: both
+    is_proportion: true
+
+  revenue:
+    label: Revenue
+    kind: sum
+    numerator: "sum(revenue)"
+    denominator: null
+    support: impression
+    direction_of_concern: both
+
+  ecpm:
+    label: eCPM
+    kind: ratio
+    numerator: "sum(revenue)"
+    denominator: "sum(is_impression)"
+    scale: 1000
+    support: impression
+    direction_of_concern: both
+    is_proportion: false
+
+  rpr:
+    label: Revenue per request
+    kind: ratio
+    numerator: "sum(revenue)"
+    denominator: "count(*)"
+    support: request
+    direction_of_concern: both
+    is_proportion: false
+
+# Revenue = Requests x Fill rate x (Impressions / Fills) x eCPM / 1000
+# Walked multiplicatively in log space to attribute a revenue move to a factor before any
+# dimension is considered. Naming the factor first is what stops the search from reporting a
+# price problem as a volume problem.
+revenue_identity:
+  target: revenue
+  factors: [requests, fill_rate, render_rate, ecpm]
+  scale: 0.001
+
+dimensions:
+  ad_format:
+    source: ad_events
+    available_from: request
+    in_lattice: true
+  category:
+    source: apps
+    available_from: request
+    in_lattice: true
+  publisher_tier:
+    source: apps
+    available_from: request
+    in_lattice: true
+  region:
+    source: geo_device
+    available_from: request
+    in_lattice: true
+  country:
+    source: geo_device
+    available_from: request
+    in_lattice: true
+  device_model:
+    source: geo_device
+    available_from: request
+    in_lattice: true
+  os_version:
+    source: geo_device
+    available_from: request
+    in_lattice: true
+  vertical:
+    source: advertisers
+    # Only populated once an ad was actually served.
+    available_from: fill
+    in_lattice: true
+  campaign_type:
+    source: advertisers
+    available_from: fill
+    in_lattice: true
+
+  # High-cardinality keys stay out of the lattice: crossing them would explode the rollup and
+  # they are far too overdispersed to test against a global rate. They get a separate scan
+  # that compares each entity against its own history.
+  app_id:
+    source: ad_events
+    available_from: request
+    in_lattice: false
+    high_cardinality: true
+  advertiser_id:
+    source: ad_events
+    available_from: fill
+    in_lattice: false
+    high_cardinality: true
+  geo_device_id:
+    source: ad_events
+    available_from: request
+    in_lattice: false
+    high_cardinality: true
+
+# Structural nesting the localizer must respect. Reporting "country=UK" and "region=EU"
+# as two independent findings is double counting, and a candidate that is merely a child of
+# the real culprit must lose to its parent, not sit beside it.
+hierarchies:
+  - [region, country]
+  - [os_family, os_version]
