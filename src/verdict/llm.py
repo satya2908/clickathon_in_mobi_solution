@@ -49,6 +49,19 @@ def _extract_text(response: Any) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _stopped_early(response: Any) -> bool:
+    """Whether the model ran out of budget rather than finishing.
+
+    Read defensively for the same reason as ``_extract_text``: ``finish_reason`` is absent on
+    some compatible servers, and a missing field must mean "no evidence of truncation" rather
+    than raising. Only the explicit ``length`` signal counts.
+    """
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    return getattr(choices[0], "finish_reason", None) == "length"
+
+
 class LLMClient:
     """A thin wrapper over an OpenAI-compatible endpoint whose contract is that it never raises."""
 
@@ -103,6 +116,10 @@ class LLMClient:
         if self._client is None:
             return Completion("", self.cfg.model, False, self._error)
 
+        extra: dict[str, Any] = {}
+        if self.cfg.reasoning_effort:
+            extra["reasoning_effort"] = self.cfg.reasoning_effort
+
         try:
             response = self._client.chat.completions.create(
                 model=self.cfg.model,
@@ -112,6 +129,7 @@ class LLMClient:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
+                **extra,
             )
         except Exception as exc:
             # Deliberately every exception, not a list of the SDK's own error classes. The
@@ -124,6 +142,21 @@ class LLMClient:
         text = _extract_text(response).strip()
         if not text:
             return Completion("", self.cfg.model, False, "The endpoint returned no content.")
+
+        # A response cut off at the token ceiling is rejected rather than published. The numeric
+        # verifier downstream cannot catch this: it checks that every figure was computed, and a
+        # sentence ending "This segment" contains no wrong figure, so a half-written paragraph
+        # passes it cleanly and reaches the case file. Worse, a cut landing inside a number turns
+        # "-44.8%" into a bare "6", which then reads as an invented figure and gets blamed on the
+        # model. Both were observed against Gemini Flash, whose thinking tokens are charged
+        # against max_tokens without appearing in the text.
+        if _stopped_early(response):
+            return Completion(
+                "", self.cfg.model, False,
+                f"The response hit the {self.cfg.max_tokens}-token ceiling before finishing. "
+                "Raise llm.max_tokens, or set llm.reasoning_effort low if the model bills "
+                "hidden reasoning against that budget.",
+            )
 
         # The served model can differ from the one requested -- an alias resolving to a dated
         # snapshot, a gateway routing to a fallback -- and the case file should record what

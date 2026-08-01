@@ -146,7 +146,15 @@ services:
       PORT: 3080
       MONGO_URI: mongodb://chat-db:27017/LibreChat
       # Same key the narration layer uses, so there is one credential to supply rather than two.
-      OPENAI_API_KEY: ${LLM_API_KEY:-}
+      # Read by the custom endpoint in librechat.yaml rather than by LibreChat's built-in OpenAI
+      # provider, which would ignore the base URL and send Gemini traffic to api.openai.com.
+      # Falls back to LibreChat's "user_provided" sentinel rather than an empty string, which
+      # would make it drop the endpoint at boot and present an empty model list with no reason
+      # given. With the sentinel the stack always starts, and a key can be pasted into the
+      # browser instead of the file -- useful when someone else is driving the demo.
+      LLM_API_KEY: ${LLM_API_KEY:-user_provided}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
       # Local-only secrets. Real deployments must override all three; they are fixed here so the
       # stack starts without a setup step, and fixed values in a compose file are exactly why
       # this profile is not something to expose beyond localhost.

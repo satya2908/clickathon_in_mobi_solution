@@ -36,6 +36,11 @@ llm:
   max_tokens: ${LLM_MAX_TOKENS:-1200}
   timeout_seconds: ${LLM_TIMEOUT:-60}
   max_retries: ${LLM_MAX_RETRIES:-2}
+  # Only sent when non-empty. Reasoning models charge hidden thinking against max_tokens, so a
+  # budget that looks generous can still return prose that stops mid-sentence; lowering the
+  # effort leaves room for the answer. Blank by default because providers that have never heard
+  # of the parameter reject the whole request rather than ignoring it.
+  reasoning_effort: ${LLM_REASONING_EFFORT:-}
 
 tracing:
   # Each investigation step emits a span carrying what was run, why, and what came back.

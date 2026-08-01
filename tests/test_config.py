@@ -9,7 +9,7 @@ below is not hypothetical -- it shipped, and it failed against ClickHouse Cloud 
 
 import pytest
 
-from verdict.config import ConfigError, _coerce, _substitute, expand
+from verdict.config import ConfigError, _coerce, _substitute, expand, read_dotenv
 
 
 class TestSubstitution:
@@ -104,3 +104,41 @@ class TestExpand:
         )
         assert settings == {"max_execution_time": 300, "max_threads": 0}
         assert not isinstance(settings["max_threads"], bool)
+
+
+class TestDotenvIsReadButNeverWins:
+    """`.env` was a Docker-only artefact: Compose reads it, the CLI did not.
+
+    Editing a value there and running `verdict investigate` changed nothing, with no error to
+    explain the silence. Reading it closes that gap; letting the real environment win keeps a
+    Kubernetes secret or an explicit `LLM_ENABLED=false` from being shadowed by a stray file.
+    """
+
+    def test_values_are_read_from_the_file(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("LLM_MODEL=gemini-flash-latest\nLLM_MAX_TOKENS=3000\n")
+        assert read_dotenv(path) == {"LLM_MODEL": "gemini-flash-latest", "LLM_MAX_TOKENS": "3000"}
+
+    def test_a_missing_file_is_not_an_error(self, tmp_path):
+        assert read_dotenv(tmp_path / "nope.env") == {}
+
+    def test_comments_blanks_and_exports_are_handled(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("# a comment\n\nexport LLM_MODEL=gpt-4o-mini\n   \nNOT_A_PAIR\n")
+        assert read_dotenv(path) == {"LLM_MODEL": "gpt-4o-mini"}
+
+    def test_surrounding_quotes_are_stripped(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("A=\"quoted\"\nB='single'\nC=bare\n")
+        assert read_dotenv(path) == {"A": "quoted", "B": "single", "C": "bare"}
+
+    def test_a_hash_inside_a_value_survives(self, tmp_path):
+        """Truncating a credential at a '#' is a miserable failure to diagnose."""
+        path = tmp_path / ".env"
+        path.write_text("LLM_API_KEY=abc#def\n")
+        assert read_dotenv(path)["LLM_API_KEY"] == "abc#def"
+
+    def test_an_equals_sign_inside_a_value_survives(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("TOKEN=a=b=c\n")
+        assert read_dotenv(path)["TOKEN"] == "a=b=c"
