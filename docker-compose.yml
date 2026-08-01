@@ -92,6 +92,76 @@ services:
     # Long-lived so `docker compose exec verdict verdict <command>` works during a demo.
     entrypoint: ["sleep", "infinity"]
 
+  # ---- Conversational surface, profile "chat" ----
+  #
+  #   docker compose --profile chat up -d
+  #
+  # A judge asking "what about EU fill rate that week?" is asking a question no dashboard was
+  # built to answer in advance. The honest way to answer it is to let a model write SQL against
+  # the same rollup the detectors read, which is what the MCP server below exposes.
+  #
+  # The boundary matters: the model gets a tool that runs queries, not a summary of the data and
+  # not the authority to decide anything. Verdicts still come from the deterministic pipeline.
+  # This is the follow-up-question surface, not a second opinion.
+
+  mcp-clickhouse:
+    image: mcp/clickhouse
+    container_name: verdict-mcp-clickhouse
+    restart: unless-stopped
+    profiles: ["chat"]
+    environment:
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:?set CLICKHOUSE_HOST in .env}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8443}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-verdict}
+      # Must agree with the port. Pairing false with 8443 is the usual setup mistake and it
+      # surfaces as an opaque HTTP client error rather than a scheme complaint.
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-true}
+      CLICKHOUSE_MCP_SERVER_TRANSPORT: sse
+      CLICKHOUSE_MCP_BIND_HOST: 0.0.0.0
+      CLICKHOUSE_MCP_AUTH_DISABLED: "true"
+    ports:
+      - "${MCP_PORT:-8001}:8000"
+
+  chat-db:
+    image: mongo:7
+    container_name: verdict-chat-db
+    restart: unless-stopped
+    profiles: ["chat"]
+    command: mongod --quiet --logpath /dev/null
+    volumes:
+      - chat-db-data:/data/db
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: verdict-librechat
+    restart: unless-stopped
+    profiles: ["chat"]
+    depends_on: [chat-db, mcp-clickhouse]
+    ports:
+      - "${LIBRECHAT_PORT:-3080}:3080"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3080
+      MONGO_URI: mongodb://chat-db:27017/LibreChat
+      # Same key the narration layer uses, so there is one credential to supply rather than two.
+      OPENAI_API_KEY: ${LLM_API_KEY:-}
+      # Local-only secrets. Real deployments must override all three; they are fixed here so the
+      # stack starts without a setup step, and fixed values in a compose file are exactly why
+      # this profile is not something to expose beyond localhost.
+      CREDS_KEY: ${LIBRECHAT_CREDS_KEY:-f34be427ebb29de8d88c107a71546019685ed8b241d8f2ed00c3df97ad2566f0}
+      CREDS_IV: ${LIBRECHAT_CREDS_IV:-e2341419ec3dd3d19b13a1a87fafcbfb}
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET:-16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef}
+      JWT_REFRESH_SECRET: ${LIBRECHAT_JWT_REFRESH:-eaa5191f2914e30b9387fd84e254e4ba6fc51b4654d3a7bd9694d9fbc4bfea1b}
+      ALLOW_REGISTRATION: "true"
+      ALLOW_EMAIL_LOGIN: "true"
+    volumes:
+      - ./config/librechat.yaml:/app/librechat.yaml:ro
+      - librechat-images:/app/client/public/images
+
 volumes:
   clickstack-data:
   clickstack-logs:
+  chat-db-data:
+  librechat-images:

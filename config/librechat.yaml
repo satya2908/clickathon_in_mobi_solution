@@ -1,0 +1,85 @@
+# LibreChat configuration for the Verdict chat surface.
+#
+# Mounted read-only at /app/librechat.yaml. LibreChat reads this once at boot, so a change here
+# needs `docker compose --profile chat restart librechat`. It exits with code 1 on a validation
+# error rather than falling back to defaults, which is the behaviour you want: a silently
+# ignored MCP block would look like a working chat that simply cannot see any data.
+#
+# What this file is for, in one line: it gives the model a tool that runs SQL against the same
+# rollup tables the detectors read, and nothing else.
+
+version: 1.3.0
+cache: true
+
+interface:
+  # The dropdown has to be visible, because the point of the surface is that a reader can see
+  # which tool answered them. A chat that silently consults a database is a worse artefact than
+  # no chat at all -- the whole argument of this project is that the reasoning is inspectable.
+  mcpServers:
+    use: true
+    share: false
+    create: false
+    public: false
+
+# LibreChat refuses private and local addresses unless they are named here, and the refusal is
+# quiet in the way that matters: the server starts, the chat works, and it simply has no tools.
+# Both forms are listed so this file works whether LibreChat runs inside this compose project or
+# separately on the same host.
+mcpSettings:
+  allowedAddresses:
+    - 'mcp-clickhouse:8000'
+    - 'host.docker.internal:8001'
+    - 'localhost:8001'
+
+mcpServers:
+  verdict-clickhouse:
+    type: sse
+    # The compose service name, so the traffic stays on the compose network instead of leaving
+    # for the host and coming back. host.docker.internal is the documented alternative and is
+    # allowed above, but it does not exist by default on Linux hosts.
+    url: http://mcp-clickhouse:8000/sse
+    timeout: 60000
+    serverInstructions: |
+      You are attached to the Verdict analytics warehouse: ClickHouse holding InMobi ad-serving
+      data and the output of an automated root-cause pipeline.
+
+      Read this before your first query.
+
+      Facts live in `ad_events`. Do not query it for aggregates; it holds nine million rows and
+      the pre-aggregated rollups answer the same questions far faster.
+
+      Prefer the rollups: `rollup_5m`, `rollup_1h`, `rollup_1d`. Each row is one time bucket for
+      one combination of dimensions, identified by `combo` plus `key_a` and `key_b`.
+        - `combo = '__total__'` is all traffic, with both keys empty.
+        - A one-dimensional slice sets `combo` to the dimension name, the value in `key_a`, and
+          leaves `key_b` empty -- for example `combo = 'country' AND key_a = 'IN' AND key_b = ''`.
+        - A two-dimensional slice joins the names with a pipe in alphabetical order, such as
+          `combo = 'country|os_version'`, with the values in the matching order.
+      Not every pair exists at every grain: `rollup_5m` stores one-dimensional slices only.
+
+      Only counts are stored: requests, fills, impressions, clicks, revenue. Rates are never
+      stored, because rates do not add up across slices and counts do. Compute them yourself and
+      always guard the denominator:
+        fill_rate   = sum(fills)       / nullIf(sum(requests), 0)
+        render_rate = sum(impressions) / nullIf(sum(fills), 0)
+        ctr         = sum(clicks)      / nullIf(sum(impressions), 0)
+        ecpm        = 1000 * sum(revenue) / nullIf(sum(impressions), 0)
+        rpr         = sum(revenue)     / nullIf(sum(requests), 0)
+
+      Never alias an aggregate to the name of a column it sums. `sum(fills) AS fills` resolves
+      the alias inside its own aggregate and ClickHouse rejects the query.
+
+      Every `bucket` is DateTime('UTC'). State timezones explicitly and never assume local time.
+
+      Pipeline output lives in `cases` (one verdict each, with the accused segment, confidence
+      and impact), `case_candidates` (every segment considered, including the ones cleared and
+      why), `case_steps` (what each investigation step did and concluded), `coverage_ledger`
+      (cells that could not be tested, with the reason), and `runs`.
+
+      `coverage_ledger` is the one most people forget, and it is the one that keeps you honest.
+      A segment absent from `cases` was not necessarily innocent -- it may simply have carried
+      too little traffic to test. Check it before telling anyone a slice looks clean.
+
+      Two standing rules for your answers. Show the SQL you ran, so the reader can check it.
+      And when the data cannot answer what was asked, say so plainly instead of reaching for the
+      nearest number that looks close; the pipeline's whole claim is that it never does that.
