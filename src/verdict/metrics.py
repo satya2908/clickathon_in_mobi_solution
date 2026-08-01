@@ -30,6 +30,18 @@ _COUNTER_FORM = {
     "sum(revenue)": "sum(revenue)",
 }
 
+# The same mapping as attribute names, so a metric can be evaluated in Python from a counter
+# tuple exactly as ClickHouse evaluates it in SQL. A test asserts the two agree; if they ever
+# diverge, an explain-away result computed in Python would silently contradict the detection
+# that produced it.
+_COUNTER_FIELD = {
+    "count(*)": "requests",
+    "sum(is_filled)": "fills",
+    "sum(is_impression)": "impressions",
+    "sum(is_click)": "clicks",
+    "sum(revenue)": "revenue",
+}
+
 DEFAULT_METRICS_PATH = Path("config/metrics.yaml")
 
 
@@ -52,6 +64,14 @@ class Metric:
     @property
     def is_ratio(self) -> bool:
         return self.denominator is not None
+
+    @property
+    def numerator_field(self) -> str:
+        return _COUNTER_FIELD[self.numerator]
+
+    @property
+    def denominator_field(self) -> str | None:
+        return _COUNTER_FIELD[self.denominator] if self.denominator else None
 
     def numerator_sql(self, *, from_rollup: bool = True) -> str:
         return _COUNTER_FORM[self.numerator] if from_rollup else self.numerator

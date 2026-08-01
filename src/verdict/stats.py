@@ -137,6 +137,28 @@ def pearson_dispersion(
     return total / dof
 
 
+def quasi_poisson_dispersion(
+    cells: Sequence[tuple[float, float]], n_groups: int
+) -> float:
+    """Overdispersion for count metrics, from ``(observed, expected)`` cells.
+
+    Request arrivals are driven by shared conditions rather than being independent, so counts
+    are reliably overdispersed relative to Poisson -- often by a large factor. Assuming pure
+    Poisson would treat ordinary traffic variation as overwhelming evidence.
+    """
+    total = 0.0
+    used = 0
+    for observed, expected in cells:
+        if expected <= 0:
+            continue
+        total += (observed - expected) ** 2 / expected
+        used += 1
+    dof = used - n_groups
+    if dof <= 0:
+        return 1.0
+    return total / dof
+
+
 def clamp_dispersion(phi: float, floor: float = 1.0, ceiling: float = 50.0) -> float:
     """Keep the estimate inside a defensible range.
 
