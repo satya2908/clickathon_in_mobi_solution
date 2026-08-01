@@ -335,7 +335,9 @@ def wilson_interval(k: float, n: float, *, z: float = Z_ALPHA_01) -> tuple[float
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
-def benjamini_hochberg(p_values: Sequence[float], alpha: float = 0.01) -> list[bool]:
+def benjamini_hochberg(
+    p_values: Sequence[float], alpha: float = 0.01, *, tests: int | None = None
+) -> list[bool]:
     """Benjamini-Hochberg step-up procedure, returning a keep/reject mask.
 
     A single scan tests thousands of segments, so an uncorrected 1% threshold would produce
@@ -343,13 +345,25 @@ def benjamini_hochberg(p_values: Sequence[float], alpha: float = 0.01) -> list[b
     than the family-wise error rate is the right trade here: the cost of one spurious case in a
     published list is an operator's afternoon, not a wrong decision, and Bonferroni over
     thousands of correlated segments would suppress genuine incidents.
+
+    ``tests`` is the size of the family, which is the number of hypotheses *tested* and not the
+    number of p-values handed to this function. They differ whenever the caller has already
+    dropped some tested cells -- rises when only falls are wanted, say. Understating it is the
+    one way to make this procedure silently permissive, since every threshold is alpha*k/m and
+    a smaller m raises all of them. Overstating it only costs power, so the parameter is
+    clamped upward rather than trusted in both directions.
     """
-    m = len(p_values)
-    if m == 0:
+    n = len(p_values)
+    if n == 0:
         return []
-    order = sorted(range(m), key=lambda i: p_values[i])
-    keep = [False] * m
-    largest = -1
+    m = max(n, tests or 0)
+
+    # Ranks come from the position within the full family. The supplied p-values are the
+    # smallest n of m, so their ranks are 1..n regardless of how much larger m is; only the
+    # threshold alpha*rank/m widens with the family.
+    order = sorted(range(n), key=lambda i: p_values[i])
+    keep = [False] * n
+    largest = 0
     for rank, idx in enumerate(order, start=1):
         if p_values[idx] <= alpha * rank / m:
             largest = rank

@@ -108,12 +108,16 @@ class DetectionResult:
     gaps: list[CoverageGap] = field(default_factory=list)
     dispersion: dict[str, float] = field(default_factory=dict)
     tested_cells: int = 0
+    # False until `apply_correction` has run. While false, `findings` is every tested cell, not
+    # a list of anomalies, and reporting from it would publish the uncorrected scan.
+    corrected: bool = False
 
     def extend(self, other: DetectionResult) -> None:
         self.findings.extend(other.findings)
         self.gaps.extend(other.gaps)
         self.dispersion.update(other.dispersion)
         self.tested_cells += other.tested_cells
+        self.corrected = self.corrected and other.corrected
 
 
 def estimate_dispersion(
@@ -217,8 +221,14 @@ def detect_temporal(
     *,
     combos: list[str] | None = None,
     tracer: Tracer | None = None,
+    correct: bool = True,
 ) -> DetectionResult:
-    """Scan one metric across the lattice, comparing each cell against its own history."""
+    """Scan one metric across the lattice, comparing each cell against its own history.
+
+    Pass ``correct=False`` when several metrics will be published together, then call
+    ``apply_correction`` once over the pooled result. Until it is called, ``result.findings``
+    holds every tested cell rather than a reportable list.
+    """
     metric = registry.metric(metric_name)
     result = DetectionResult()
 
@@ -228,15 +238,40 @@ def detect_temporal(
             _detect_temporal_combo(reader, registry, cfg, metric, window, combo, tracer)
         )
 
-    # The correction spans every cell of every combo for this metric, because that is the
-    # number of chances noise had to produce a finding. Correcting per combo would leave the
-    # overall error rate 46 times higher than the threshold implies.
-    if result.findings:
-        keep = benjamini_hochberg([f.p_value for f in result.findings], cfg.p_value_threshold)
-        for finding, survives in zip(result.findings, keep, strict=True):
-            finding.survives_correction = survives
-        result.findings = [f for f in result.findings if f.survives_correction]
+    if correct:
+        apply_correction(result, cfg)
+    return result
 
+
+def apply_correction(result: DetectionResult, cfg: DetectionConfig) -> DetectionResult:
+    """Control the false discovery rate over a whole family, then filter to what is reportable.
+
+    The family is every cell that was tested and could have produced a finding. On this
+    dataset a single metric at hourly grain tests on the order of 1,700 cells, so at an
+    uncorrected threshold of 0.01 roughly seventeen cells per metric cross it by chance alone.
+    Reporting those as incidents is how an operator learns to ignore the system.
+
+    Call this once over the pooled result of every metric and window that will be published
+    together. Correcting each metric separately leaves the overall error rate multiplied by the
+    number of metrics, which is the same mistake as correcting per combo, one level up.
+    """
+    if not result.findings:
+        return result
+
+    keep = benjamini_hochberg(
+        [f.p_value for f in result.findings],
+        cfg.p_value_threshold,
+        tests=result.tested_cells,
+    )
+    for finding, survives in zip(result.findings, keep, strict=True):
+        finding.survives_correction = survives
+
+    result.findings = [
+        f
+        for f in result.findings
+        if f.survives_correction and abs(f.relative_effect) >= cfg.min_relative_effect
+    ]
+    result.corrected = True
     return result
 
 
@@ -316,10 +351,15 @@ def _detect_temporal_combo(
         result.tested_cells += 1
         test = _test_segment(metric, observed, pooled, hist, phi)
 
-        if abs(test.relative_effect) < cfg.min_relative_effect:
-            continue
-        if test.p_value > cfg.p_value_threshold:
-            continue
+        # Every tested cell is kept here, significant or not. Filtering by p-value at this
+        # point and correcting afterwards is what made the correction a no-op: Benjamini-
+        # Hochberg keeps the largest k where p(k) <= alpha*k/m, and if every input already
+        # satisfies p <= alpha then k = m and nothing is ever rejected. The correction has to
+        # see the p-values that failed, because the count of tests is the whole input to it.
+        #
+        # The effect-size gate moves after correction for the same reason: effect size and
+        # p-value are strongly correlated, so dropping small effects first would remove the
+        # bulk of the large p-values and reshape the null distribution the correction assumes.
         if test.direction == "rise" and not cfg.detect_rises:
             continue
 
