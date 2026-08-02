@@ -8,7 +8,10 @@
 # What this file is for, in one line: it gives the model a tool that runs SQL against the same
 # rollup tables the detectors read, and nothing else.
 
-version: 1.3.0
+# 1.3.13, not 1.3.0: `interface.defaultPinnedTools` and `modelSpecs.list[].mcpServers` were
+# both added after 1.3.0, and declaring the older schema makes the loader log
+# "Outdated Config version" and read those keys under rules that predate them.
+version: 1.3.13
 cache: true
 
 # Gemini over its OpenAI-compatible endpoint, declared as a custom provider rather than through
@@ -64,9 +67,24 @@ modelSpecs:
       label: 'Verdict.AI'
       default: true
       description: 'Reads the same ClickHouse rollups the detectors read.'
+      # Attached to the spec, so the tool is live on the first message. Configuring an MCP
+      # server only makes it *available*: the dropdown read "MCP Servers" with nothing
+      # selected, and until someone picked it the model had no way to reach the warehouse
+      # and answered from memory. A chat that silently stops consulting the database is the
+      # exact failure this surface exists to rule out, so it cannot be one click away.
+      mcpServers:
+        - 'verdict-clickhouse'
       preset:
-        endpoint: 'Gemini'
-        model: 'models/gemini-flash-lite-latest'
+        # `google`, LibreChat's built-in provider, rather than the custom Gemini endpoint
+        # defined above. The custom one reaches Gemini through its OpenAI-compatible shim,
+        # which is the right choice everywhere else in this project -- one wire format for
+        # the pipeline and the chat -- but it cannot carry a tool conversation. Gemini
+        # attaches a thought_signature to every function call and rejects the next turn
+        # without it, and that field has no home in the OpenAI schema. The native protocol
+        # has somewhere to put it. The custom endpoint stays defined and reachable from the
+        # dropdown, for chat that needs no tools.
+        endpoint: 'google'
+        model: 'gemini-flash-lite-latest'
         greeting: |
           Ask about any run, case, or segment. I query the same rollup tables the detectors
           read, so anything I tell you can be checked against the case file.
@@ -80,6 +98,12 @@ interface:
     share: false
     create: false
     public: false
+
+  # Pins the server in the composer so its state is visible without opening the dropdown.
+  # The spec above is what actually attaches the tool; this is what lets a reader confirm at
+  # a glance which one answered them.
+  defaultPinnedTools:
+    - 'verdict-clickhouse'
 
 # LibreChat refuses private and local addresses unless they are named here, and the refusal is
 # quiet in the way that matters: the server starts, the chat works, and it simply has no tools.

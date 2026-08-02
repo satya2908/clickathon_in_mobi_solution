@@ -198,7 +198,16 @@ services:
       # browser instead of the file -- useful when someone else is driving the demo.
       LLM_API_KEY: ${LLM_API_KEY:-user_provided}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
-      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
+      LLM_MODEL: ${LLM_MODEL:-gemini-flash-lite-latest}
+      # The same key again, under the name LibreChat's built-in Google provider looks for.
+      # That provider speaks Gemini's native protocol instead of the OpenAI-compatible
+      # shim, which matters only once tools are in play: Gemini returns a
+      # thought_signature alongside every function call and rejects the follow-up turn
+      # unless it is echoed back, and the signature rides in `extra_content` -- a field
+      # with no place in the OpenAI schema, which the compatible client therefore drops.
+      # Measured directly against the API: identical requests, 200 with the signature and
+      # 400 without it.
+      GOOGLE_KEY: ${LLM_API_KEY:-user_provided}
       # Local-only secrets. Real deployments must override all three; they are fixed here so the
       # stack starts without a setup step, and fixed values in a compose file are exactly why
       # this profile is not something to expose beyond localhost.
