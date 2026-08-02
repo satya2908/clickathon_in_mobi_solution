@@ -98,17 +98,25 @@ class InvestigationResult:
     findings_after_correction: int = 0
     metrics_scanned: list[str] = field(default_factory=list)
     persisted: bool = False
+    # Groups whose localization raised. Carried on the result rather than left in the log,
+    # because the failure mode is silent by construction: a localization that dies produces no
+    # case, and no case is indistinguishable from a clean window. A typo in a trace call once
+    # emptied every fill_rate case from a run that still reported success.
+    failures: list[str] = field(default_factory=list)
 
     @property
     def publishable(self) -> list[Case]:
         return [c for c in self.cases if c.confidence_value >= 0.0 and c.verdict_kind == "localized"]
 
     def summary(self) -> str:
-        return (
+        out = (
             f"run {self.run_id}: {self.cells_tested:,} cells tested across "
             f"{len(self.metrics_scanned)} metrics, {self.findings_after_correction} findings "
             f"survived correction, {len(self.cases)} case(s), {len(self.gaps)} coverage gap(s)"
         )
+        if self.failures:
+            out += f", {len(self.failures)} localization(s) FAILED"
+        return out
 
 
 def verdict_key(case: Case) -> tuple[str, str, str, str]:
@@ -417,8 +425,12 @@ def _investigate(
             try:
                 localization = localizer.localize(entry, direction=direction)
             except Exception as exc:  # noqa: BLE001 - one failed localization must not end the run
-                log.warning("Localization failed for %s: %s", entry.metric, exc)
+                # Logged at error, recorded on the result, and reported by the run's status.
+                # A warning was not enough: the only other trace of this is a case that never
+                # appears, which reads exactly like a window with nothing wrong in it.
+                log.error("Localization failed for %s: %s", entry.metric, exc, exc_info=True)
                 span.result(f"failed: {exc}")
+                result.failures.append(f"{entry.metric}: {exc}")
                 continue
             accused = localization.accused
             span.result(
@@ -533,11 +545,20 @@ def _persist(
         # From the in-memory datetime, which keeps microseconds, rather than from the difference
         # of the two stored timestamps, which are truncated to whole seconds.
         elapsed_ms = max(0, round((datetime.now(UTC) - started).total_seconds() * 1000))
+        # A run that could not localize part of what it found is not a complete run, whatever
+        # the writes did. Recorded in the status so the console does not present it as a clean
+        # window, which is what an empty case list otherwise looks like.
+        notes = []
+        if not ok:
+            notes.append("one or more writes failed; see logs")
+        if result.failures:
+            notes.append(f"{len(result.failures)} localization(s) failed: "
+                         + "; ".join(result.failures[:3]))
         store.close_run(
             run_id,
             cases_found=len(result.cases),
-            status="complete" if ok else "partial",
-            note="" if ok else "one or more writes failed; see logs",
+            status="complete" if ok and not result.failures else "partial",
+            note=" | ".join(notes),
             config_json=cfg.redacted_json(),
             git_sha=git_sha(),
             started_at=started,

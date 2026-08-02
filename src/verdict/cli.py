@@ -416,8 +416,20 @@ def investigate_cmd(
 
     console.print(f"\n{result.summary()}\n")
 
+    # Before the all-clear, never after it. An empty case list means one of two opposite
+    # things, and the reassuring one must not be printed while the other is true.
+    if result.failures:
+        console.print(
+            f"[bold red]{len(result.failures)} localization(s) failed[/] — the case list below "
+            "is incomplete, and a metric missing from it was not necessarily clean:"
+        )
+        for failure in result.failures:
+            console.print(f"  [red]•[/] {failure}")
+        console.print()
+
     if not result.cases:
-        console.print("[green]No incident met the reporting bar.[/]")
+        if not result.failures:
+            console.print("[green]No incident met the reporting bar.[/]")
         _print_coverage(result)
         return
 
