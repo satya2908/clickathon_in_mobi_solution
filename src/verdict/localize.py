@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .config import DetectionConfig, LocalizationConfig
+from .decompose import RateMixSplit, rate_mix_split
 from .detect import Finding, _pool_history, _test_segment, estimate_dispersion
 from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window, subtract
@@ -208,6 +209,12 @@ class Localization:
     # own claim. Populated at accusation time so it reads the same history snapshot as every
     # other number in the case.
     accused_finding: Finding | None = None
+    # For ratio metrics, whether the aggregate moved because segments' own rates changed or
+    # because traffic moved between segments whose rates differ. The counterfactual tests
+    # cannot tell these apart -- removing a segment repairs the parent either way -- and they
+    # call for different responses, so the split is computed separately and published beside
+    # the verdict rather than folded into it.
+    mechanism: RateMixSplit | None = None
 
     @property
     def cleared(self) -> list[Candidate]:
@@ -705,8 +712,11 @@ class Localizer:
             self._build_ledger(metric, accused, candidates, history)
             confirmatory = self._confirm(metric, accused, history, window)
 
+        mechanism = self._mechanism(metric, accused, finding, history)
+
         if self.tracer is not None:
             self._trace(metric, finding, parent_dev, candidates, accused, mode)
+            self._trace_mechanism(mechanism)
 
         return Localization(
             metric=metric.name,
@@ -720,7 +730,60 @@ class Localizer:
             mode=mode,
             note=note,
             accused_finding=confirmatory,
+            mechanism=mechanism,
         )
+
+    def _mechanism(
+        self,
+        metric: Metric,
+        accused: Candidate | None,
+        finding: Finding,
+        history: HistoryCache,
+    ) -> RateMixSplit | None:
+        """Split the aggregate movement into rate, mix and interaction over one partition.
+
+        Decomposed over the accused segment's own combo, because that is the partition the
+        verdict is stated in and the reader will want the two to line up. Falling back to the
+        finding's combo keeps the answer available for an unlocalized case, where "the total
+        moved and traffic shifted underneath it" is often the whole story.
+        """
+        if not metric.is_ratio:
+            return None
+
+        segment = accused.segment if accused is not None else finding.segment
+        combo = segment.combo
+        if not combo or combo == TOTAL_COMBO:
+            return None
+
+        cells = history.combo(combo)
+        if not cells:
+            return None
+
+        observed = {seg: weeks[0] for seg, weeks in cells.items()}
+        baseline = {seg: history.expected(weeks) for seg, weeks in cells.items()}
+        return rate_mix_split(metric, observed, baseline, combo=combo)
+
+    def _trace_mechanism(self, mechanism: RateMixSplit | None) -> None:
+        if mechanism is None or self.tracer is None:
+            return
+        with self.tracer.span(
+            f"mechanism:{mechanism.metric}:{mechanism.combo}", kind="localizer"
+        ) as span:
+            span.what(
+                "Split the aggregate movement into three exactly additive parts: segments' own "
+                "rates changing at fixed traffic shares, traffic shares changing at fixed "
+                "rates, and the two moving together."
+            )
+            span.why(
+                "Removing a segment repairs the parent whether that segment broke or merely "
+                "grew, so the counterfactual cannot tell a fault from a traffic shift. They "
+                "call for different responses from different teams."
+            )
+            span.result(
+                f"{mechanism.describe()} Rate {mechanism.rate:+.4f}, mix {mechanism.mix:+.4f}, "
+                f"interaction {mechanism.interaction:+.4f}, against a total movement of "
+                f"{mechanism.total:+.4f}."
+            )
 
     def _confirm(
         self, metric: Metric, accused: Candidate, history: HistoryCache, window: Window
