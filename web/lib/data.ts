@@ -1,10 +1,5 @@
 import type { Case, Health, Run, Step, VerdictKind } from './types';
 
-/** Thresholds the engine applies, restated here only so the console can label what it is
- *  showing. They are read from `config/verdict.yaml` on the engine side; if one changes
- *  there it must change here, and the label is the point -- a bare number with no stated
- *  threshold tells a reader nothing about whether it is good. */
-export const PUBLISH_THRESHOLD = 0.5;
 export const P_THRESHOLD = 0.01;
 
 export const KINDS: VerdictKind[] = ['localized', 'unlocalized', 'undecomposed', 'no_data'];
@@ -33,15 +28,15 @@ export interface Kpi {
   spans: number;
 }
 
-/** Every figure is a fold over the cases actually returned. Nothing here is stored, so a
- *  KPI can never disagree with the table underneath it. */
-export function kpiOf(cases: Case[], spans: number): Kpi {
+/** Case figures are folds over the rows returned. Coverage is run-level because gaps belong
+ *  to the sweep and can exist for metrics that produced no case at all. */
+export function kpiOf(cases: Case[], spans: number, coverageGaps: number): Kpi {
   const byKind = { localized: 0, unlocalized: 0, undecomposed: 0, no_data: 0 } as Record<VerdictKind, number>;
   for (const c of cases) byKind[c.verdict_kind] = (byKind[c.verdict_kind] ?? 0) + 1;
 
   return {
     cases: cases.length,
-    published: cases.filter(c => c.confidence >= PUBLISH_THRESHOLD).length,
+    published: cases.filter(c => c.publishable).length,
     byKind,
     meanConfidence: cases.length ? cases.reduce((s, c) => s + c.confidence, 0) / cases.length : 0,
     // Losses only. Netting a recovered segment against a broken one would report a quiet
@@ -51,7 +46,7 @@ export function kpiOf(cases: Case[], spans: number): Kpi {
     revenueAtRisk: cases.reduce((s, c) => (c.impact_json.revenue != null ? s + Math.min(0, c.impact_json.revenue) : s), 0),
     unpriced: cases.filter(c => c.impact_json.revenue == null).length,
     cellsTested: cases[0]?.cells_tested ?? 0,
-    coverageGaps: cases.reduce((s, c) => s + c.coverage.length, 0),
+    coverageGaps,
     llmVerified: cases.filter(c => c.narrative_source === 'llm' && c.narrative_verified).length,
     spans,
   };

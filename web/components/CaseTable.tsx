@@ -2,7 +2,6 @@
 
 import { SortIcon } from './icons';
 import { Segment } from './Segment';
-import { PUBLISH_THRESHOLD } from '@/lib/data';
 import { ARROW, clearedOf, impact, KIND_BADGE, KIND_LABEL, metricValue, pct, priority } from '@/lib/format';
 import type { Case } from '@/lib/types';
 
@@ -20,8 +19,10 @@ const HINT: Record<string, string> = {
   Verdict:
     'localized: a segment was named and the removal test held. unlocalized: real movement, no segment explains it. undecomposed: a lead that failed its breadth checks. no data: too little traffic to decompose.',
   Observed: 'What the accused segment actually read over the window.',
-  Expected: 'The median of the same weekday and hour over prior baseline weeks.',
-  Conf: `A weighted sum of five named checks, not a model output. Components that could not run contribute zero rather than being renormalised away. Published above ${PUBLISH_THRESHOLD.toFixed(2)}.`,
+  Expected:
+    'The detector baseline over aligned prior weeks: trimmed pooled counters for counts and proportions, or a log-space median for revenue and continuous ratios.',
+  Conf:
+    'A deterministic weighted score, not a model output. Publication also requires enough components and a measured significance check; the UI uses the engine’s stored decision.',
   Impact:
     'Estimated revenue effect. Some are reached through a chain of estimates rather than measured directly; the basis is on the case.',
   Cleared:
@@ -35,7 +36,7 @@ const HINT: Record<string, string> = {
 function flagsOf(c: Case): { label: string; cls: string }[] {
   const flags: { label: string; cls: string }[] = [];
   if (c.narrative_source === 'template' && c.unsupported.length) flags.push({ label: 'guard fail', cls: 'badge d' });
-  if (c.confidence < PUBLISH_THRESHOLD) flags.push({ label: 'below publish', cls: 'badge w' });
+  if (!c.publishable) flags.push({ label: 'withheld', cls: 'badge w' });
   if (c.recurrence_of) flags.push({ label: 'recurrence', cls: 'badge w' });
   return flags;
 }
@@ -124,7 +125,7 @@ export function CaseTable({
             const p = priority(c.impact_json.revenue, c.confidence);
             const flags = flagsOf(c);
             const named = Object.keys(c.segment_json).length > 0;
-            const publishable = c.confidence >= PUBLISH_THRESHOLD;
+            const publishable = c.publishable;
             return (
               <tr
                 key={c.case_id}
@@ -160,8 +161,16 @@ export function CaseTable({
                   {impact(c.impact_json)}
                 </td>
                 <td className="m r">{clearedOf(c.candidates)}</td>
-                <td className="m r" style={{ color: c.coverage.length ? 'var(--warn)' : 'var(--tx3)' }}>
-                  {c.coverage.length}
+                <td
+                  className="m r"
+                  style={{ color: c.coverage_total ? 'var(--warn)' : 'var(--tx3)' }}
+                  title={
+                    c.coverage_total > c.coverage.length
+                      ? `${c.coverage_total.toLocaleString()} total; the case panel shows the ${c.coverage.length} highest-volume rows`
+                      : undefined
+                  }
+                >
+                  {c.coverage_total}
                 </td>
                 <td title={flags.map(f => f.label).join(', ')}>
                   {flags[0] && <span className={flags[0].cls}>{flags[0].label}</span>}

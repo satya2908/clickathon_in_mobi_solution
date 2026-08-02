@@ -59,6 +59,13 @@ export function MetricChart({ series }: { series: Series[] }) {
   const cursor = hover ?? points.length - 1;
   const at = points[cursor];
   const delta = at.expected !== 0 ? (at.observed - at.expected) / at.expected : 0;
+  const baselineLabel = at.baseline_weeks_seen
+    ? `${at.baseline_weeks_used}${
+        at.baseline_weeks_used === at.baseline_weeks_seen
+          ? ''
+          : ` of ${at.baseline_weeks_seen}`
+      } aligned baseline wk used`
+    : 'no usable baseline';
 
   return (
     <div className="panelbox chartbox">
@@ -90,7 +97,8 @@ export function MetricChart({ series }: { series: Series[] }) {
             <i style={{ borderColor: 'var(--tx3)', borderTopStyle: 'dashed' }} /> expected
           </span>
           <span>
-            <i style={{ borderColor: 'var(--tx3)', opacity: 0.35 }} /> ±2σ of {shape.weeks} baseline wk
+            <i style={{ borderColor: 'var(--tx3)', opacity: 0.35 }} /> robust historical spread ·{' '}
+            {baselineLabel}
           </span>
         </span>
       </div>
@@ -157,7 +165,7 @@ export function MetricChart({ series }: { series: Series[] }) {
           <>
             <span className="badge d">onset {stamp(onset.t)}</span>
             <span className="mono dim2" style={{ fontSize: 11 }}>
-              parent effect {pct(shape.effect)} over {shape.to - shape.from + 1}h outside the band
+              parent effect {pct(shape.effect)} over {shape.to - shape.from + 1}h outside the historical band
             </span>
           </>
         ) : (

@@ -69,7 +69,7 @@ function digest(c: Case) {
       .filter(x => x.status !== 'accused' && x.status !== 'cleared')
       .slice(0, 12)
       .map(x => ({ candidate: x.candidate, status: x.status })),
-    untestable_cells: c.coverage.length,
+    untestable_cells: c.coverage_total,
   };
 }
 

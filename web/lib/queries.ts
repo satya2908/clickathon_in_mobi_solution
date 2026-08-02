@@ -21,9 +21,10 @@ import type {
 } from './types';
 
 /** Coverage gaps are per (run, metric, grain, window), and a wide sweep can leave thousands.
- *  The table is evidence of what could not be tested, not a work queue, so the biggest
- *  denominators -- the cells that came closest to being testable -- are the informative end. */
-const COVERAGE_PER_CASE = 100;
+ *  The count must include every row, while the drill-down only needs the highest-volume
+ *  examples. The database applies this limit after computing the complete group/run counts. */
+const COVERAGE_DETAILS_PER_GROUP = 100;
+const LEGACY_PUBLISH_THRESHOLD = 0.5;
 
 const num = (v: unknown, fallback = 0) => {
   const n = typeof v === 'number' ? v : Number.parseFloat(String(v ?? ''));
@@ -57,7 +58,7 @@ export async function getRuns(limit = 20): Promise<Run[]> {
   const raw = await rows<RunRow>(
     `SELECT run_id, started_at, finished_at, status, cases_found, git_sha, trace_id, note,
             duration_ms
-     FROM runs ORDER BY started_at DESC LIMIT {limit:UInt32}`,
+     FROM runs FINAL ORDER BY started_at DESC LIMIT {limit:UInt32}`,
     { limit },
   );
   return raw.map(r => {
@@ -246,24 +247,44 @@ interface CoverageRow {
   required: number;
   reason: string;
   resolvable_effect: number;
+  gap_count: number;
+  run_count: number;
+}
+
+interface CoverageResult {
+  byKey: Map<string, CoverageGap[]>;
+  countByKey: Map<string, number>;
+  total: number;
 }
 
 /** Keyed by metric and window rather than by case, because that is how the ledger is written:
  *  a cell that could not be tested belongs to the sweep, not to whichever finding survived it. */
-async function getCoverage(runId: string): Promise<Map<string, CoverageGap[]>> {
-  const out = new Map<string, CoverageGap[]>();
+async function getCoverage(runId: string): Promise<CoverageResult> {
+  const byKey = new Map<string, CoverageGap[]>();
+  const countByKey = new Map<string, number>();
   const raw = await rows<CoverageRow>(
     `SELECT metric, grain, window_start, combo, key_a, key_b, denominator, required, reason,
-            resolvable_effect
-     FROM coverage_ledger WHERE run_id = {run:String}
-     ORDER BY metric, denominator DESC`,
-    { run: runId },
+            resolvable_effect, gap_count, run_count
+     FROM (
+       SELECT metric, grain, window_start, combo, key_a, key_b, denominator, required, reason,
+              resolvable_effect,
+              count() OVER (PARTITION BY metric, grain, window_start) AS gap_count,
+              count() OVER () AS run_count,
+              row_number() OVER (
+                PARTITION BY metric, grain, window_start
+                ORDER BY denominator DESC, combo, key_a, key_b
+              ) AS detail_rank
+       FROM coverage_ledger
+       WHERE run_id = {run:String}
+     )
+     WHERE detail_rank <= {details:UInt32}
+     ORDER BY metric, grain, window_start, denominator DESC`,
+    { run: runId, details: COVERAGE_DETAILS_PER_GROUP },
   );
 
   for (const r of raw) {
     const key = `${r.metric}|${r.grain}|${iso(r.window_start)}`;
-    const list = out.get(key) ?? [];
-    if (list.length >= COVERAGE_PER_CASE) continue;
+    const list = byKey.get(key) ?? [];
     list.push({
       combo: r.combo,
       key_a: r.key_a ?? '',
@@ -273,9 +294,10 @@ async function getCoverage(runId: string): Promise<Map<string, CoverageGap[]>> {
       reason: r.reason ?? '',
       resolvable_effect: num(r.resolvable_effect, -1),
     });
-    out.set(key, list);
+    byKey.set(key, list);
+    countByKey.set(key, num(r.gap_count));
   }
-  return out;
+  return { byKey, countByKey, total: num(raw[0]?.run_count) };
 }
 
 // ---------------------------------------------------------------- cases
@@ -333,18 +355,32 @@ function readGates(raw: string): Record<(typeof GATES)[number], CheckState> {
 /** `state: 'scored'` is the engine's way of saying the component was actually measured.
  *  Anything else -- withheld, unknown -- must not contribute to the weighted sum, which is
  *  why it is carried as a boolean rather than collapsed into a zero score. */
-function readComponents(raw: string): Component[] {
-  const parsed = parse<{ components?: { name?: string; score?: number; weight?: number; state?: string; detail?: string }[] }>(
-    raw,
-    {},
-  );
-  return (parsed.components ?? []).map(c => ({
-    name: (c.name ?? 'significance') as Component['name'],
-    score: num(c.score),
-    weight: num(c.weight),
-    scored: c.state === 'scored',
-    detail: c.detail ?? '',
-  }));
+function readConfidence(raw: string, score: number): {
+  components: Component[];
+  publishable: boolean;
+  caveat: string;
+} {
+  const parsed = parse<{
+    components?: { name?: string; score?: number; weight?: number; state?: string; detail?: string }[];
+    publishable?: boolean;
+    caveat?: string;
+  }>(raw, {});
+  return {
+    components: (parsed.components ?? []).map(c => ({
+      name: (c.name ?? 'significance') as Component['name'],
+      score: num(c.score),
+      weight: num(c.weight),
+      scored: c.state === 'scored',
+      detail: c.detail ?? '',
+    })),
+    // Rows written before the decision was added have no boolean at all. Preserve their old
+    // threshold behaviour, but never replace an explicit engine decision with that shortcut.
+    publishable:
+      typeof parsed.publishable === 'boolean'
+        ? parsed.publishable
+        : score >= LEGACY_PUBLISH_THRESHOLD,
+    caveat: parsed.caveat ?? '',
+  };
 }
 
 function readImpact(raw: string): Case['impact_json'] {
@@ -368,7 +404,12 @@ function readImpact(raw: string): Case['impact_json'] {
   };
 }
 
-export async function getCases(runId: string): Promise<Case[]> {
+interface CasesResult {
+  cases: Case[];
+  coverageGaps: number;
+}
+
+async function loadCases(runId: string): Promise<CasesResult> {
   const raw = await rows<CaseRow>(
     `SELECT case_id, run_id, detected_at, metric, grain, window_start, window_end, direction,
             observed, expected, relative_effect, p_value, dispersion, verdict_kind, segment,
@@ -378,7 +419,6 @@ export async function getCases(runId: string): Promise<Case[]> {
      FROM cases WHERE run_id = {run:String} ORDER BY confidence DESC, p_value ASC`,
     { run: runId },
   );
-  if (!raw.length) return [];
 
   const ids = raw.map(r => r.case_id);
   const [candidates, coverage, traces] = await Promise.all([
@@ -387,9 +427,12 @@ export async function getCases(runId: string): Promise<Case[]> {
     getTraces(ids),
   ]);
 
-  return raw.map(r => {
+  const cases = raw.map(r => {
     const windowStart = iso(r.window_start);
     const grain = (r.grain || '1h') as Grain;
+    const coverageKey = `${r.metric}|${grain}|${windowStart}`;
+    const score = num(r.confidence);
+    const confidence = readConfidence(r.confidence_json, score);
     return {
       case_id: r.case_id,
       run_id: r.run_id,
@@ -407,8 +450,10 @@ export async function getCases(runId: string): Promise<Case[]> {
       verdict_kind: (r.verdict_kind || 'localized') as VerdictKind,
       segment: r.segment || 'all traffic',
       segment_json: parse<Record<string, string>>(r.segment_json, {}),
-      confidence: num(r.confidence),
-      confidence_json: readComponents(r.confidence_json),
+      confidence: score,
+      confidence_json: confidence.components,
+      publishable: confidence.publishable,
+      confidence_caveat: confidence.caveat,
       gates_json: readGates(r.gates_json),
       impact_json: readImpact(r.impact_json),
       narrative: r.narrative ?? '',
@@ -421,12 +466,18 @@ export async function getCases(runId: string): Promise<Case[]> {
       detector: (r.detector || 'temporal') as Detector,
       mode: (r.mode || 'explain_away') as LocalizationMode,
       candidates: candidates.get(r.case_id) ?? [],
-      coverage: coverage.get(`${r.metric}|${grain}|${windowStart}`) ?? [],
+      coverage_total: coverage.countByKey.get(coverageKey) ?? 0,
+      coverage: coverage.byKey.get(coverageKey) ?? [],
       cells_tested: num(r.cells_tested),
       llm_model: r.narrative_model ?? '',
       trace: traces.get(r.case_id) ?? null,
     };
   });
+  return { cases, coverageGaps: coverage.total };
+}
+
+export async function getCases(runId: string): Promise<Case[]> {
+  return (await loadCases(runId)).cases;
 }
 
 // ---------------------------------------------------------------- series
@@ -435,17 +486,22 @@ export async function getCases(runId: string): Promise<Case[]> {
  *  ratio is always sum/sum over the bucket, never a mean of per-row ratios, because the
  *  latter does not survive aggregation and would put a different number on the chart than
  *  the one the detector tested. */
-const FORMULA: Record<Metric, { num: keyof Counters; den: keyof Counters | null; scale: number }> = {
-  requests: { num: 'requests', den: null, scale: 1 },
-  fills: { num: 'fills', den: null, scale: 1 },
-  fill_rate: { num: 'fills', den: 'requests', scale: 1 },
-  impressions: { num: 'impressions', den: null, scale: 1 },
-  render_rate: { num: 'impressions', den: 'fills', scale: 1 },
-  clicks: { num: 'clicks', den: null, scale: 1 },
-  ctr: { num: 'clicks', den: 'impressions', scale: 1 },
-  revenue: { num: 'revenue', den: null, scale: 1 },
-  ecpm: { num: 'revenue', den: 'impressions', scale: 1000 },
-  rpr: { num: 'revenue', den: 'requests', scale: 1 },
+type BaselineModel = 'count' | 'proportion' | 'continuous';
+
+const FORMULA: Record<
+  Metric,
+  { num: keyof Counters; den: keyof Counters | null; scale: number; model: BaselineModel }
+> = {
+  requests: { num: 'requests', den: null, scale: 1, model: 'count' },
+  fills: { num: 'fills', den: null, scale: 1, model: 'count' },
+  fill_rate: { num: 'fills', den: 'requests', scale: 1, model: 'proportion' },
+  impressions: { num: 'impressions', den: null, scale: 1, model: 'count' },
+  render_rate: { num: 'impressions', den: 'fills', scale: 1, model: 'proportion' },
+  clicks: { num: 'clicks', den: null, scale: 1, model: 'count' },
+  ctr: { num: 'clicks', den: 'impressions', scale: 1, model: 'proportion' },
+  revenue: { num: 'revenue', den: null, scale: 1, model: 'continuous' },
+  ecpm: { num: 'revenue', den: 'impressions', scale: 1000, model: 'continuous' },
+  rpr: { num: 'revenue', den: 'requests', scale: 1, model: 'continuous' },
 };
 
 export const CHART_METRICS: Metric[] = ['fill_rate', 'revenue', 'ecpm', 'ctr', 'requests', 'render_rate'];
@@ -491,8 +547,104 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 };
 
-/** Baseline weeks to look back over, matching the detector. */
-const WEEKS = 6;
+interface BaselineSample {
+  counters: Counters;
+  week: number;
+}
+
+interface Baseline {
+  expected: number;
+  lo: number;
+  hi: number;
+  seen: number;
+  used: number;
+}
+
+const addCounters = (a: Counters, b: Counters): Counters => ({
+  requests: a.requests + num(b.requests),
+  fills: a.fills + num(b.fills),
+  impressions: a.impressions + num(b.impressions),
+  clicks: a.clicks + num(b.clicks),
+  revenue: a.revenue + num(b.revenue),
+});
+
+const emptyCounters = (): Counters => ({ requests: 0, fills: 0, impressions: 0, clicks: 0, revenue: 0 });
+
+/** The detector chooses one extreme week from the whole comparison window and uses that same
+ * mask for every bucket. Choosing a different week at each chart point would draw a baseline
+ * that the detector never evaluated. */
+function droppedWeek(metric: Metric, samples: BaselineSample[]): number | null {
+  const f = FORMULA[metric];
+  if (f.model === 'continuous') return null;
+  const usable = samples
+    .map(s => ({ ...s, value: valueOf(metric, s.counters) }))
+    .filter(s => s.value !== null && (f.model !== 'count' || num(s.counters.requests) > 0)) as
+    (BaselineSample & { value: number })[];
+  if (usable.length < 3) return null;
+  const centre = median(usable.map(s => s.value))!;
+  let worst = usable[0];
+  for (const sample of usable.slice(1)) {
+    if (Math.abs(sample.value - centre) > Math.abs(worst.value - centre)) worst = sample;
+  }
+  return worst.week;
+}
+
+/** Mirror the detector's centre: counts use a trimmed arithmetic mean, proportions pool the
+ * kept counters, and revenue/continuous ratios use the median in log space. The band is a
+ * descriptive robust spread around that centre; significance still comes from the case. */
+function baselineOf(metric: Metric, samples: BaselineSample[], drop: number | null): Baseline | null {
+  const f = FORMULA[metric];
+  const seen = samples
+    .map(s => ({ ...s, value: valueOf(metric, s.counters) }))
+    .filter(s => s.value !== null && Number.isFinite(s.value)) as (BaselineSample & { value: number })[];
+  const kept =
+    f.model === 'continuous'
+      ? seen.filter(s => s.value > 0)
+      : seen.filter(s => s.week !== drop && (f.model !== 'count' || num(s.counters.requests) > 0));
+  if (!kept.length) return null;
+
+  let expected: number;
+  if (f.model === 'count') {
+    expected = kept.reduce((sum, s) => sum + num(s.counters[f.num]), 0) / kept.length;
+  } else if (f.model === 'proportion' && f.den) {
+    const numerator = kept.reduce((sum, s) => sum + num(s.counters[f.num]), 0);
+    const denominator = kept.reduce((sum, s) => sum + num(s.counters[f.den!]), 0);
+    if (denominator <= 0) return null;
+    expected = (numerator / denominator) * f.scale;
+  } else {
+    expected = Math.exp(median(kept.map(s => Math.log(s.value)))!);
+  }
+
+  if (f.model === 'continuous') {
+    const logs = kept.map(s => Math.log(s.value));
+    const centre = median(logs)!;
+    const sigma = (median(logs.map(v => Math.abs(v - centre))) ?? 0) * 1.4826;
+    const pad = sigma > 0 ? 2 * sigma : Math.log(1.03);
+    return {
+      expected,
+      lo: Math.exp(Math.log(expected) - pad),
+      hi: Math.exp(Math.log(expected) + pad),
+      seen: seen.length,
+      used: kept.length,
+    };
+  }
+
+  const values = kept.map(s => s.value);
+  const centre = median(values)!;
+  const sigma = (median(values.map(v => Math.abs(v - centre))) ?? 0) * 1.4826;
+  const pad = sigma > 0 ? 2 * sigma : Math.max(Math.abs(expected) * 0.03, Number.EPSILON);
+  return {
+    expected,
+    lo: Math.max(0, expected - pad),
+    hi: expected + pad,
+    seen: seen.length,
+    used: kept.length,
+  };
+}
+
+/** Read the same override as `config/verdict.yaml`; four is the shipped detector default. */
+const configuredWeeks = Number.parseInt(process.env.DETECT_BASELINE_WEEKS ?? '', 10);
+const WEEKS = Number.isInteger(configuredWeeks) && configuredWeeks > 0 ? configuredWeeks : 4;
 const HOUR_MS = 3_600_000;
 const WEEK_MS = 7 * 24 * HOUR_MS;
 
@@ -506,17 +658,15 @@ export interface Series {
   from: number;
   to: number;
   effect: number;
-  weeks: number;
 }
 
 export async function getSeries(metric: Metric, startIso: string, endIso: string): Promise<Series> {
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
-  const empty: Series = { metric, label: METRIC_LABEL[metric], points: [], from: -1, to: -1, effect: 0, weeks: 0 };
+  const empty: Series = { metric, label: METRIC_LABEL[metric], points: [], from: -1, to: -1, effect: 0 };
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return empty;
 
-  // One scan covers the window and every baseline week behind it. Splitting them would run
-  // seven queries to answer one question.
+  // One scan covers the window and every configured baseline week behind it.
   const from = new Date(start - WEEKS * WEEK_MS).toISOString().slice(0, 19).replace('T', ' ');
   const to = new Date(end).toISOString().slice(0, 19).replace('T', ' ');
 
@@ -538,8 +688,22 @@ export async function getSeries(metric: Metric, startIso: string, endIso: string
   const byTime = new Map<number, Counters>();
   for (const r of raw) byTime.set(Date.parse(iso(r.ts)), r);
 
+  const totals = Array.from({ length: WEEKS }, emptyCounters);
+  const weekSeen = Array.from({ length: WEEKS }, () => false);
+  for (let t = start; t < end; t += HOUR_MS) {
+    for (let w = 1; w <= WEEKS; w++) {
+      const counters = byTime.get(t - w * WEEK_MS);
+      if (!counters) continue;
+      totals[w - 1] = addCounters(totals[w - 1], counters);
+      weekSeen[w - 1] = true;
+    }
+  }
+  const totalHistory = totals
+    .map((counters, week) => ({ counters, week }))
+    .filter(s => weekSeen[s.week]);
+  const drop = droppedWeek(metric, totalHistory);
+
   const points: Point[] = [];
-  let weeksSeen = 0;
 
   for (let t = start; t < end; t += HOUR_MS) {
     const observed = valueOf(metric, byTime.get(t));
@@ -547,27 +711,22 @@ export async function getSeries(metric: Metric, startIso: string, endIso: string
 
     // Same weekday, same hour, prior weeks: the comparison that keeps a Saturday from being
     // reported as an incident every Saturday.
-    const history: number[] = [];
+    const history: BaselineSample[] = [];
     for (let w = 1; w <= WEEKS; w++) {
-      const v = valueOf(metric, byTime.get(t - w * WEEK_MS));
-      if (v !== null) history.push(v);
+      const counters = byTime.get(t - w * WEEK_MS);
+      if (counters) history.push({ counters, week: w - 1 });
     }
-    weeksSeen = Math.max(weeksSeen, history.length);
-
-    const expected = median(history) ?? observed;
-    // Robust spread from the baseline itself. A fixed percentage band looks the same on a
-    // metric that never moves and one that swings 30% a day, which is exactly the
-    // distinction a reader needs the band to draw.
-    const mad = median(history.map(h => Math.abs(h - expected))) ?? 0;
-    const sigma = mad * 1.4826;
-    const pad = sigma > 0 ? 2 * sigma : Math.abs(expected) * 0.03;
+    const baseline = baselineOf(metric, history, drop);
+    const expected = baseline?.expected ?? observed;
 
     points.push({
       t: new Date(t).toISOString(),
       observed,
       expected,
-      lo: expected - pad,
-      hi: expected + pad,
+      lo: baseline?.lo ?? expected,
+      hi: baseline?.hi ?? expected,
+      baseline_weeks_seen: baseline?.seen ?? 0,
+      baseline_weeks_used: baseline?.used ?? 0,
     });
   }
 
@@ -583,7 +742,7 @@ export async function getSeries(metric: Metric, startIso: string, endIso: string
     effect = exp !== 0 ? (obs - exp) / exp : 0;
   }
 
-  return { metric, label: METRIC_LABEL[metric], points, from: fromIdx, to: toIdx, effect, weeks: weeksSeen };
+  return { metric, label: METRIC_LABEL[metric], points, from: fromIdx, to: toIdx, effect };
 }
 
 // ---------------------------------------------------------------- dashboard
@@ -594,6 +753,7 @@ export interface Dashboard {
   cases: Case[];
   series: Series[];
   spans: number;
+  coverageGaps: number;
   /** True when the database answered but had nothing in it, as distinct from a failed read. */
   empty: boolean;
 }
@@ -610,9 +770,10 @@ export async function getDashboard(runId?: string): Promise<Dashboard> {
     ? (runList.find(r => r.run_id === runId) ?? null)
     : (runList.find(r => r.cases_found > 0) ?? runList[0] ?? null);
 
-  if (!run) return { run: null, runs: runList, cases: [], series: [], spans: 0, empty: true };
+  if (!run) return { run: null, runs: runList, cases: [], series: [], spans: 0, coverageGaps: 0, empty: true };
 
-  const cases = await getCases(run.run_id);
+  const caseData = await loadCases(run.run_id);
+  const cases = caseData.cases;
   const window = cases[0];
 
   const [series, spanCount] = await Promise.all([
@@ -628,6 +789,7 @@ export async function getDashboard(runId?: string): Promise<Dashboard> {
     cases,
     series: series.filter(s => s.points.length > 0),
     spans: num(spanCount[0]?.n),
+    coverageGaps: caseData.coverageGaps,
     empty: cases.length === 0,
   };
 }

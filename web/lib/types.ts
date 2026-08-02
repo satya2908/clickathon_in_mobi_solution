@@ -147,6 +147,10 @@ export interface Case {
   segment_json: Record<string, string>;
   confidence: number;
   confidence_json: Component[];
+  /** The engine's publication decision. A score above the numeric threshold is not enough
+   * when significance or too many confidence components could not be measured. */
+  publishable: boolean;
+  confidence_caveat: string;
   gates_json: Record<'sufficiency' | 'minimality' | 'maximality' | 'holdout', CheckState>;
   /** `revenue` is null whenever the metric is a count rather than money and no conversion to
    *  revenue was defensible. That is not the same as zero, and the UI must not round it to
@@ -166,6 +170,9 @@ export interface Case {
   detector: Detector;
   mode: LocalizationMode;
   candidates: Candidate[];
+  /** The complete count for this metric/grain/window. `coverage` below contains only the
+   * highest-volume rows retained for drill-down. */
+  coverage_total: number;
   coverage: CoverageGap[];
   cells_tested: number;
   llm_model: string;
@@ -200,4 +207,6 @@ export interface Point {
   expected: number;
   lo: number;
   hi: number;
+  baseline_weeks_seen: number;
+  baseline_weeks_used: number;
 }

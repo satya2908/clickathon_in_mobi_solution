@@ -8,7 +8,7 @@ import { usePanelWidth } from './usePanelWidth';
 import { Recommendations } from './Recommendations';
 import { Waterfall } from './Waterfall';
 import { Segment } from './Segment';
-import { flatten, PUBLISH_THRESHOLD } from '@/lib/data';
+import { flatten } from '@/lib/data';
 import { traceUrl } from '@/lib/links';
 import { ARROW, clearedOf, impact, KIND_BADGE, KIND_LABEL, metricValue, money, ms, pct } from '@/lib/format';
 import type { Candidate, Case, RecommendationSet, Step } from '@/lib/types';
@@ -183,7 +183,7 @@ export function CasePanel({
   const accused = c.candidates.find(x => x.status === 'accused');
   const hyperdx = traceUrl(c.trace_id, c.detected_at);
   const unscored = c.confidence_json.filter(x => !x.scored).length;
-  const publishable = c.confidence >= PUBLISH_THRESHOLD;
+  const publishable = c.publishable;
   const gateMark = { pass: '✓', fail: '✗', unknown: '–' } as const;
   const gateCls = { pass: 'y', fail: 'n', unknown: 'u' } as const;
 
@@ -359,8 +359,11 @@ export function CasePanel({
               <section className="sec">
                 <div className="sechd">
                   <span className="hd">Confidence {c.confidence.toFixed(2)}</span>
-                  <span className={publishable ? 'badge g' : 'badge w'}>
-                    {publishable ? 'publishable' : `below ${PUBLISH_THRESHOLD.toFixed(2)}`}
+                  <span
+                    className={publishable ? 'badge g' : 'badge w'}
+                    title={c.confidence_caveat || undefined}
+                  >
+                    {publishable ? 'publishable' : 'withheld'}
                   </span>
                   {unscored > 0 && <span className="badge w">{unscored} of 5 unscored</span>}
                   <span className="gates sp">
@@ -372,6 +375,11 @@ export function CasePanel({
                     ))}
                   </span>
                 </div>
+                {c.confidence_caveat && (
+                  <p className="dim" style={{ margin: '0 0 10px', lineHeight: 1.5 }}>
+                    {c.confidence_caveat}
+                  </p>
+                )}
                 <div className="tblbox">
                   <table className="tbl dense">
                     <colgroup>
@@ -471,11 +479,17 @@ export function CasePanel({
                 <div className="sechd">
                   <span className="hd">Coverage</span>
                   <span className="dim2 mono" style={{ fontSize: 11 }}>
-                    {c.coverage.length ? `${c.coverage.length} cells unresolved` : 'no gaps'}
+                    {c.coverage_total
+                      ? `${c.coverage_total.toLocaleString()} cells unresolved${
+                          c.coverage_total > c.coverage.length
+                            ? ` · showing top ${c.coverage.length}`
+                            : ''
+                        }`
+                      : 'no gaps'}
                   </span>
                 </div>
                 <div className="tblbox">
-                  {c.coverage.length === 0 ? (
+                  {c.coverage_total === 0 ? (
                     <div className="empty">every cell cleared the detection floor</div>
                   ) : (
                     <table className="tbl dense">

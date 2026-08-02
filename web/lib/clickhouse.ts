@@ -40,9 +40,9 @@ export function ch(): ClickHouseClient {
   return globalThis.__verdictCh;
 }
 
-/** Every read goes through here so that a broken query degrades to an empty section rather
- *  than a 500 on the whole page. A console whose job is to report failures is the last
- *  place that should go blank when one of its panels cannot load. */
+/** Every read goes through here. Query failures are logged with context and rethrown so the
+ *  page's error boundary can distinguish an outage from a valid empty result. Returning `[]`
+ *  here would turn broken SQL or an unreachable database into "no incidents". */
 export async function rows<T>(query: string, params: Record<string, unknown> = {}): Promise<T[]> {
   try {
     const result = await ch().query({
@@ -53,7 +53,7 @@ export async function rows<T>(query: string, params: Record<string, unknown> = {
     return await result.json<T>();
   } catch (err) {
     console.error(`[clickhouse] ${(err as Error).message}\n${query.slice(0, 400)}`);
-    return [];
+    throw err;
   }
 }
 

@@ -8,7 +8,17 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function Page() {
-  const { run, runs, cases, series, spans, empty } = await getDashboard();
+  const { run, runs, cases, series, spans, coverageGaps, empty } = await getDashboard();
 
-  return <Console run={run} runs={runs} cases={cases} series={series} spans={spans} empty={empty} />;
+  return (
+    <Console
+      run={run}
+      runs={runs}
+      cases={cases}
+      series={series}
+      spans={spans}
+      coverageGaps={coverageGaps}
+      empty={empty}
+    />
+  );
 }

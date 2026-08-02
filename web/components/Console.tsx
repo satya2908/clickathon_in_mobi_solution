@@ -6,7 +6,7 @@ import { CaseTable, type Sort } from './CaseTable';
 import { MetricChart } from './MetricChart';
 import { SearchIcon } from './icons';
 import { TopBar } from './TopBar';
-import { healthOf, KINDS, kpiOf, PUBLISH_THRESHOLD } from '@/lib/data';
+import { healthOf, KINDS, kpiOf } from '@/lib/data';
 import { KIND_FILL, KIND_LABEL, money, priority } from '@/lib/format';
 import type { Series } from '@/lib/queries';
 import type { Case, RecommendationSet, Run, VerdictKind } from '@/lib/types';
@@ -37,13 +37,13 @@ interface Props {
   cases: Case[];
   series: Series[];
   spans: number;
+  coverageGaps: number;
   empty: boolean;
 }
 
-/** Shown when the database is reachable but has no cases. Distinct from a failed read,
- *  which logs server-side and degrades that one section: a console that renders an empty
- *  table for both leaves the reader unable to tell "nothing broke" from "I am broken". */
-function Empty({ runs }: { runs: Run[] }) {
+/** Shown only when the database answered successfully but has no cases. Failed reads throw
+ *  into the route error boundary, so they can never render as a clean empty run. */
+function Empty({ runs, coverageGaps }: { runs: Run[]; coverageGaps: number }) {
   return (
     <div className="wrap">
       <div className="panelbox" style={{ padding: 28 }}>
@@ -55,6 +55,12 @@ function Empty({ runs }: { runs: Run[] }) {
             ? 'The most recent runs completed without publishing a case. Either the windows were quiet, or the sweep has not been pointed at a window containing an incident.'
             : 'No runs have been recorded yet. The console reads what the engine writes, so it stays empty until an investigation has been persisted.'}
         </p>
+        {coverageGaps > 0 && (
+          <p className="dim" style={{ maxWidth: 620, lineHeight: 1.6, margin: '0 0 14px' }}>
+            The selected run also recorded {coverageGaps.toLocaleString()} cells it could not
+            test. No case is required for a coverage gap to exist.
+          </p>
+        )}
         <div className="sql">verdict investigate --start 2026-06-23T00:00:00 --hours 48</div>
       </div>
     </div>
@@ -87,7 +93,7 @@ const KIND_HINT: Record<VerdictKind, string> = {
   no_data: 'Too little traffic to decompose. Published so it is not silently dropped.',
 };
 
-export function Console({ run, runs, cases, series, spans, empty }: Props) {
+export function Console({ run, runs, cases, series, spans, coverageGaps, empty }: Props) {
   const [kind, setKind] = useState<VerdictKind | null>(null);
   const [pri, setPri] = useState<number | null>(null);
   const [query, setQuery] = useState('');
@@ -97,7 +103,7 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
   // leaving the console. Only pop what we pushed.
   const pushed = useRef(false);
 
-  const kpi = useMemo(() => kpiOf(cases, spans), [cases, spans]);
+  const kpi = useMemo(() => kpiOf(cases, spans, coverageGaps), [cases, spans, coverageGaps]);
   const health = useMemo(() => healthOf(run, cases), [run, cases]);
 
   useEffect(() => {
@@ -250,7 +256,7 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
       <div className="body">
         <div className="scroll">
           {empty ? (
-            <Empty runs={runs} />
+            <Empty runs={runs} coverageGaps={coverageGaps} />
           ) : (
             <div className="wrap">
               <div className="kpis">
@@ -284,14 +290,14 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
                   <span className="hd">Mean confidence</span>
                   <span className="v">{kpi.meanConfidence.toFixed(2)}</span>
                   <span className="def">
-                    {kpi.published} / {kpi.cases} above {PUBLISH_THRESHOLD.toFixed(2)}
+                    {kpi.published} / {kpi.cases} engine-publishable
                   </span>
                 </div>
 
                 <div className="kpi">
                   <span className="hd">Coverage gaps</span>
                   <span className="v">{kpi.coverageGaps.toLocaleString()}</span>
-                  <span className="def">cells untestable at {window0?.grain ?? '1h'}</span>
+                  <span className="def">all untestable cells in this run</span>
                 </div>
               </div>
 
@@ -384,8 +390,8 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
         <span>{run ? run.run_id.slice(0, 8) : 'no run'}</span>
         {/* Beside the cell count deliberately: the two together are the claim, and either one
             alone invites the wrong question. */}
-        <span title="Segment-and-metric combinations tested against a baseline in this run">
-          {kpi.cellsTested.toLocaleString()} cells
+        <span title="Temporal segment-and-metric tests; structural sibling-grid tests are separate">
+          {kpi.cellsTested.toLocaleString()} temporal tests
         </span>
         {run && run.duration_ms > 0 && (
           <span title="Wall clock for the whole run: detection, localization and persistence">
