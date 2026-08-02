@@ -95,6 +95,28 @@ template prose, and `--no-persist` to investigate without writing anything.
 Five stages, one span each, all of them recorded. `verdict investigate` on a 24-hour window
 takes a few seconds and writes a case file per finding.
 
+### Latency
+
+Measured against ClickHouse Cloud in `ap-south-1` from a laptop, so every figure below includes
+real WAN round trips rather than a loopback socket. Ingest is a Parquet file on disk becoming
+queryable rollups; the materialized views build `rollup_5m`, `rollup_1h` and `rollup_1d` on the
+way in, so there is no separate aggregation step to wait for. Detect is all ten metrics over the
+full 1-way and 2-way lattice, including localization and the holdout re-test.
+
+| Batch | Ingest | Detect | End to end |
+| --- | --- | --- | --- |
+| 1 hour (10.7k events, 152 KiB) | 0.6–0.8s | 1.6–1.8s | **2.2–2.6s** |
+| 24 hours (265k events, 2.1 MiB) | 3.2s | 1.9s | **5.1s** |
+| Full corpus (9M events, cold load) | ~3 min | — | — |
+
+Detection is dominated by round trips, not by ClickHouse. The reader therefore runs in `batch`
+mode by default (`clickhouse.read_mode`, or `CLICKHOUSE_READ_MODE`): it reads the entire lattice
+— every combination, the window and all four baseline weeks — in one query per run, and the
+holdout reads both half-windows for every candidate in two more. The alternative, `per_combo`,
+issues a query per combination and exists to cross-check that the batching changed nothing;
+findings from the two modes are identical, and a 24-hour window takes 42.9s that way against
+1.9s this way.
+
 **Detect.** Two detectors that fail in different directions, which is the point of having two.
 The *temporal* detector compares each cell against its own history — a robust baseline over
 prior weeks, with overdispersion estimated rather than assumed, because ad traffic is nowhere
