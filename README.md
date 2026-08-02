@@ -100,22 +100,33 @@ takes a few seconds and writes a case file per finding.
 Measured against ClickHouse Cloud in `ap-south-1` from a laptop, so every figure below includes
 real WAN round trips rather than a loopback socket. Ingest is a Parquet file on disk becoming
 queryable rollups; the materialized views build `rollup_5m`, `rollup_1h` and `rollup_1d` on the
-way in, so there is no separate aggregation step to wait for. Detect is all ten metrics over the
-full 1-way and 2-way lattice, including localization and the holdout re-test.
+way in, so there is no separate aggregation step to wait for. Analyse is all ten metrics over
+the full 1-way and 2-way lattice, including localization, the holdout re-test, and writing every
+case, candidate, trace step and coverage row back.
 
-| Batch | Ingest | Detect | End to end |
+| Batch | Ingest | Analyse and persist | End to end |
 | --- | --- | --- | --- |
-| 1 hour (10.7k events, 152 KiB) | 0.6–0.8s | 1.6–1.8s | **2.2–2.6s** |
-| 24 hours (265k events, 2.1 MiB) | 3.2s | 1.9s | **5.1s** |
+| 1 hour (10.7k events, 152 KiB) | 0.6s | 2.8s | **3.4s** |
+| 24 hours (265k events, 2.1 MiB) | 3.2s | 2.9s | **6.1s** |
 | Full corpus (9M events, cold load) | ~3 min | — | — |
 
-Detection is dominated by round trips, not by ClickHouse. The reader therefore runs in `batch`
-mode by default (`clickhouse.read_mode`, or `CLICKHOUSE_READ_MODE`): it reads the entire lattice
-— every combination, the window and all four baseline weeks — in one query per run, and the
-holdout reads both half-windows for every candidate in two more. The alternative, `per_combo`,
-issues a query per combination and exists to cross-check that the batching changed nothing;
-findings from the two modes are identical, and a 24-hour window takes 42.9s that way against
-1.9s this way.
+Without the write-back — `--no-persist`, which is what a dry run or a what-if costs — analysis
+of a 24-hour window is **1.9s**.
+
+Almost none of that is ClickHouse. A 24-hour run issues about twenty queries totalling **107ms**
+of server time, reading 44k rows; the slowest single query is 27ms. The wall clock is round
+trips, at roughly 170ms each from here, of which 112ms is the TLS handshake. Running in the same
+region would collapse these figures.
+
+That is why nearly every optimization here is about *count* of queries rather than their cost.
+The reader runs in `batch` mode by default (`clickhouse.read_mode`, or `CLICKHOUSE_READ_MODE`):
+it reads the entire lattice — every combination, the window and all four baseline weeks — in one
+query per run, and the holdout reads both half-windows for every candidate in two more. Cases,
+candidates and trace steps are written one insert per table rather than per case, and the
+recurrence back-link asks about a whole run at once. The alternative reader, `per_combo`, issues
+a query per combination and exists to cross-check that the batching changed nothing; findings
+from the two modes are identical, and a 24-hour window takes 42.9s that way against 1.9s this
+way.
 
 **Detect.** Two detectors that fail in different directions, which is the point of having two.
 The *temporal* detector compares each cell against its own history — a robust baseline over
