@@ -1,0 +1,90 @@
+08:03:59 INFO    verdict.load: loaded dim_apps: 2000 rows
+08:03:59 INFO    verdict.load: loaded dim_advertisers: 500 rows
+08:04:00 INFO    verdict.load: loaded dim_geo_device: 5000 rows
+08:04:00 INFO    verdict.load: reloaded 3 dictionaries on cluster default
+08:04:00 INFO    verdict.load: dictionary dict_apps: 2,000 elements, 2 node(s) agree
+08:04:01 INFO    verdict.load: dictionary dict_advertisers: 500 elements, 2 node(s) agree
+08:04:01 INFO    verdict.load: dictionary dict_geo_device: 5,000 elements, 2 node(s) agree
+08:04:06 INFO    verdict.load: loaded row group 1/42 (250,000 rows total)
+08:04:10 INFO    verdict.load: loaded row group 2/42 (500,000 rows total)
+08:04:14 INFO    verdict.load: loaded row group 3/42 (750,000 rows total)
+08:04:19 INFO    verdict.load: loaded row group 4/42 (1,000,000 rows total)
+08:04:24 INFO    verdict.load: loaded row group 5/42 (1,250,000 rows total)
+08:04:28 INFO    verdict.load: loaded row group 6/42 (1,500,000 rows total)
+08:04:32 INFO    verdict.load: loaded row group 7/42 (1,750,000 rows total)
+08:04:37 INFO    verdict.load: loaded row group 8/42 (2,000,000 rows total)
+08:04:42 INFO    verdict.load: loaded row group 9/42 (2,250,000 rows total)
+08:04:46 INFO    verdict.load: loaded row group 10/42 (2,500,000 rows total)
+08:04:51 INFO    verdict.load: loaded row group 11/42 (2,750,000 rows total)
+08:04:55 INFO    verdict.load: loaded row group 12/42 (3,000,000 rows total)
+08:05:00 INFO    verdict.load: loaded row group 13/42 (3,250,000 rows total)
+08:05:04 INFO    verdict.load: loaded row group 14/42 (3,500,000 rows total)
+08:05:09 INFO    verdict.load: loaded row group 15/42 (3,750,000 rows total)
+08:05:13 INFO    verdict.load: loaded row group 16/42 (4,000,000 rows total)
+08:05:18 INFO    verdict.load: loaded row group 17/42 (4,250,000 rows total)
+08:05:22 INFO    verdict.load: loaded row group 18/42 (4,500,000 rows total)
+08:05:26 INFO    verdict.load: loaded row group 19/42 (4,750,000 rows total)
+08:05:33 INFO    verdict.load: loaded row group 20/42 (5,000,000 rows total)
+08:05:38 INFO    verdict.load: loaded row group 21/42 (5,250,000 rows total)
+08:05:43 INFO    verdict.load: loaded row group 22/42 (5,500,000 rows total)
+08:05:48 INFO    verdict.load: loaded row group 23/42 (5,750,000 rows total)
+08:05:53 INFO    verdict.load: loaded row group 24/42 (6,000,000 rows total)
+08:05:57 INFO    verdict.load: loaded row group 25/42 (6,250,000 rows total)
+08:06:02 INFO    verdict.load: loaded row group 26/42 (6,500,000 rows total)
+08:06:07 INFO    verdict.load: loaded row group 27/42 (6,750,000 rows total)
+08:06:11 INFO    verdict.load: loaded row group 28/42 (7,000,000 rows total)
+08:06:15 INFO    verdict.load: loaded row group 29/42 (7,250,000 rows total)
+08:06:20 INFO    verdict.load: loaded row group 30/42 (7,500,000 rows total)
+08:06:24 INFO    verdict.load: loaded row group 31/42 (7,750,000 rows total)
+08:06:29 INFO    verdict.load: loaded row group 32/42 (8,000,000 rows total)
+08:06:33 INFO    verdict.load: loaded row group 33/42 (8,250,000 rows total)
+08:06:37 INFO    verdict.load: loaded row group 34/42 (8,500,000 rows total)
+08:06:42 INFO    verdict.load: loaded row group 35/42 (8,750,000 rows total)
+08:06:46 INFO    verdict.load: loaded row group 36/42 (9,000,000 rows total)
+08:06:50 INFO    verdict.load: loaded row group 37/42 (9,250,000 rows total)
+08:06:54 INFO    verdict.load: loaded row group 38/42 (9,500,000 rows total)
+08:06:57 INFO    verdict.load: loaded row group 39/42 (9,750,000 rows total)
+08:07:00 INFO    verdict.load: loaded row group 40/42 (10,000,000 rows total)
+08:07:04 INFO    verdict.load: loaded row group 41/42 (10,250,000 rows total)
+08:07:08 INFO    verdict.load: loaded row group 42/42 (10,500,000 rows total)
+08:07:10 INFO    verdict.load: running backfill_5m
+08:07:15 INFO    verdict.load: running backfill_1h
+08:07:30 WARNING verdict.db: optimize_rollup_5m did not run: Received ClickHouse exception, code: 388, server response: Code: 388. DB::Exception: Cannot run optimize, background pool is already full, try to execute in synchronous mode (alter_sync >= 1). (CANNOT_ASSIGN_OPTIMIZE) (for url https://d0l43ficy9.ap-south-1.aws.clickhouse.cloud:8443)
+             Load report             
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
+┃ Object          ┃            Rows ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
+│ dim_apps        │           2,000 │
+│ dim_advertisers │             500 │
+│ dim_geo_device  │           5,000 │
+│ ad_events       │      10,500,000 │
+│ rollup_5m       │  748,795  (14x) │
+│ rollup_1h       │ 1,652,060  (6x) │
+│ rollup_1d       │  68,840  (153x) │
+└─────────────────┴─────────────────┘
+   Global metrics (raw and   
+        rollup agree)        
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ Metric      ┃       Value ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
+│ requests    │    1.05e+07 │
+│ fills       │ 8.18105e+06 │
+│ fill_rate   │    0.779148 │
+│ impressions │ 8.01699e+06 │
+│ render_rate │    0.979947 │
+│ clicks      │      87,257 │
+│ ctr         │    0.010884 │
+│ revenue     │    19,550.8 │
+│ ecpm        │     2.43867 │
+│ rpr         │  0.00186198 │
+└─────────────┴─────────────┘
+
+Event window: 2026-06-01 00:00:00 to 2026-07-10 23:59:59
+warning rollup_5m was not compacted: the merge pool was busy. Row counts below 
+are pre-merge and will fall as ClickHouse merges in the background. No total 
+changes, because reads aggregate explicitly.
+
+Load verified
+real 214.85
+user 3.02
+sys 2.49

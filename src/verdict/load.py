@@ -107,24 +107,63 @@ def load_dimensions(ch: ClickHouse, data_dir: Path, report: LoadReport) -> None:
         report.dim_rows[table] = len(rows)
         log.info("loaded %s: %d rows", table, len(rows))
 
-    for dictionary in ("dict_apps", "dict_advertisers", "dict_geo_device"):
-        ch.command(f"SYSTEM RELOAD DICTIONARY {dictionary}", name=f"reload_{dictionary}")
-
-    _verify_dictionaries(ch, report)
+    reload_dictionaries(ch)
+    verify_dictionaries(ch)
 
 
-def _verify_dictionaries(ch: ClickHouse, report: LoadReport) -> None:
-    """Confirm each dictionary answers a real lookup.
+DICTIONARIES = {
+    "dict_apps": ("dim_apps", "app_id", "category"),
+    "dict_advertisers": ("dim_advertisers", "advertiser_id", "vertical"),
+    "dict_geo_device": ("dim_geo_device", "geo_device_id", "region"),
+}
 
-    A dictionary that loaded zero rows still resolves every lookup, to the empty string. This
-    checks the count and one round-trip so that failure is loud.
+
+def _cluster(ch: ClickHouse) -> str:
+    """The cluster to broadcast to, or "" on a single-node service."""
+    rows = ch.query(
+        "SELECT cluster, count() AS n FROM system.clusters GROUP BY cluster ORDER BY n DESC",
+        name="clusters",
+    )
+    for cluster, nodes in rows:
+        if int(nodes) > 1:
+            return str(cluster)
+    return ""
+
+
+def reload_dictionaries(ch: ClickHouse) -> None:
+    """Reload every dimension dictionary on every node.
+
+    `SYSTEM RELOAD DICTIONARY` is node-local, and the dictionaries are LIFETIME(0), so on a
+    multi-node service the reload reaches whichever node answered the request and the others keep
+    serving the copy they cached. Both paths that resolve a dimension -- the materialized view on
+    insert and the backfill -- go through dictGet, so a batch inserted through a stale node is
+    attributed with the previous dimension values and nothing anywhere reports an error.
+
+    That is not hypothetical: the unseen dataset ships regenerated attributes for the same IDs,
+    and its 1.5M events were rolled up entirely under the old ones because the insert landed on
+    the node that had missed the reload. The rows looked fine, the totals reconciled against raw,
+    and every segment in the five-day investigation named the wrong population.
     """
-    expected = {
-        "dict_apps": ("dim_apps", "app_id", "category"),
-        "dict_advertisers": ("dim_advertisers", "advertiser_id", "vertical"),
-        "dict_geo_device": ("dim_geo_device", "geo_device_id", "region"),
-    }
-    for name, (table, key, attr) in expected.items():
+    cluster = _cluster(ch)
+    on = f" ON CLUSTER {cluster!r}" if cluster else ""
+    for dictionary in DICTIONARIES:
+        # Qualified, because ON CLUSTER runs on the other nodes without this session's database.
+        qualified = f"{ch.cfg.database}.{dictionary}"
+        ch.command(f"SYSTEM RELOAD DICTIONARY {qualified}{on}", name=f"reload_{dictionary}")
+    log.info("reloaded %d dictionaries%s", len(DICTIONARIES), f" on cluster {cluster}" if cluster else "")
+
+
+def verify_dictionaries(ch: ClickHouse) -> None:
+    """Confirm every node's dictionary agrees with the table it was built from.
+
+    A dictionary that loaded zero rows still resolves every lookup, to the empty string, so the
+    count and a round-trip are both checked. Neither catches a *stale* dictionary: it answers
+    promptly, with a plausible value, that happens to be the previous load's. So the answer is
+    compared against the dimension table, on every replica, which is the only check that can tell
+    "loaded" from "loaded the right thing".
+    """
+    cluster = _cluster(ch)
+    for name, (table, key, attr) in DICTIONARIES.items():
         loaded = ch.scalar(
             "SELECT element_count FROM system.dictionaries WHERE name = {n:String}",
             {"n": name},
@@ -133,18 +172,32 @@ def _verify_dictionaries(ch: ClickHouse, report: LoadReport) -> None:
         )
         if not loaded:
             raise LoadError(f"Dictionary {name} reports zero elements after reload")
-        sample = ch.scalar(f"SELECT {key} FROM {table} LIMIT 1", name=f"sample_{table}")
-        resolved = ch.scalar(
-            f"SELECT dictGet('{name}', '{attr}', {{k:String}})",
+
+        sample, truth = ch.query(
+            f"SELECT {key}, {attr} FROM {table} LIMIT 1", name=f"sample_{table}"
+        )[0]
+
+        source = f"clusterAllReplicas({cluster!r}, system.one)" if cluster else "system.one"
+        qualified = f"{ch.cfg.database}.{name}"
+        rows = ch.query(
+            f"SELECT hostName(), dictGet('{qualified}', '{attr}', {{k:String}}) FROM {source}",
             {"k": sample},
             name=f"probe_{name}",
         )
-        if not resolved:
-            raise LoadError(
-                f"Dictionary {name} resolved {attr} to an empty string for a key that exists "
-                f"in {table} ({sample!r}). The lattice would be built on empty segments."
-            )
-        log.info("dictionary %s: %s elements, probe ok", name, f"{loaded:,}")
+        for node, resolved in rows:
+            if not resolved:
+                raise LoadError(
+                    f"Dictionary {name} resolved {attr} to an empty string on {node} for a key "
+                    f"that exists in {table} ({sample!r}). The lattice would be built on empty "
+                    "segments."
+                )
+            if resolved != truth:
+                raise LoadError(
+                    f"Dictionary {name} is stale on {node}: {attr} for {sample!r} is "
+                    f"{resolved!r} there but {truth!r} in {table}. Every segment built on that "
+                    "node would name the wrong population."
+                )
+        log.info("dictionary %s: %s elements, %d node(s) agree", name, f"{loaded:,}", len(rows))
 
 
 def load_facts(ch: ClickHouse, data_dir: Path, report: LoadReport, *, limit_rows: int | None = None) -> None:

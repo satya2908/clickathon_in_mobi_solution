@@ -226,6 +226,138 @@ model. See [Where this is weak](#where-this-is-weak) for what that floor means i
 
 ---
 
+## The unseen incident bundle
+
+A sealed slice of the same universe, released in the final hours: five days of new events with
+anomalies nobody had seen. What follows is everything the system produced for it, including the
+part it got wrong.
+
+### What arrived
+
+| File | Size | Contents |
+|---|---|---|
+| `ad_events.parquet` | 14.4 MiB | 1,500,000 events, 2026-07-06 to 2026-07-10 |
+| `geo_device.csv` | 178.6 KiB | 5,000 geo/device profiles |
+| `apps.csv` | 49.6 KiB | 2,000 apps |
+| `advertisers.csv` | 10.3 KiB | 500 advertisers |
+
+14.7 MiB in total, picking up the day after the 9M-event build corpus ends. All five days are
+weekdays, which matters later. The three CSVs ship through Git LFS and arrive as 130-byte
+pointer stubs unless fetched through the media endpoint — the exact failure the loader's LFS
+guard exists to catch, met in the wild for the first time.
+
+### The trap in the dimensions
+
+The dimension tables carry the **same IDs with regenerated attribute values**. Only 147 of 2,000
+app rows, 26 of 500 advertiser rows and 18 of 5,000 geo/device rows are unchanged. Since the
+rollups denormalize `region`, `os_version` and the rest at insert time, every historical rollup
+row encodes the *old* meaning of every segment, and the history has to be re-rolled under the
+new dimensions before any comparison is like-for-like.
+
+Doing that is not cosmetic. It is the difference between a baseline and noise:
+
+| Attribution | What the five regions do across the boundary |
+|---|---|
+| Both periods under the new dimensions | +5.0%, +5.2%, +5.3%, +5.4%, +5.5% |
+| History left under the old dimensions | −37.7%, −30.1%, −10.2%, +39.5%, +122.5% |
+
+The first column is the growth trend the release notes promised, recovered exactly.
+`ad_format` — the one grouping that comes off the event rather than a dimension table — moves
++4.7% to +5.6% either way, which is the control that confirms the reading.
+
+### A bug this found: dictionary staleness on a multi-node service
+
+The first ingest produced rollups that reconciled perfectly against raw and were entirely
+misattributed. ClickHouse Cloud served this project on **two nodes**; `SYSTEM RELOAD DICTIONARY`
+is node-local; the append landed on the node that had missed the reload, and the materialized
+view resolved every dimension through a dictionary still holding the previous load. Row counts
+matched at all three grains. Every segment named the wrong population.
+
+Verification now reloads `ON CLUSTER` and compares each node's dictionary against the table it
+was built from, because "the dictionary is loaded" and "the dictionary is loaded with the right
+thing" are different claims and only the second one matters. The old check asserted the lookup
+was non-empty, which a stale dictionary passes trivially.
+
+### Cost of the run
+
+| Stage | Time |
+|---|---|
+| Ingest 1.5M events onto the live 9M corpus, queryable at all three grains | **22.4s** (66,976 events/s) |
+| Analyse one day, ten metrics, full lattice, no write-back | **2.9 – 3.4s** |
+| Analyse all five days as one 120-hour window | **3.7s** |
+| Analyse one day, with narration and full persistence | 51.0 – 58.6s |
+| Full corpus rebuild after the dimension reload (10.5M events) | 215s |
+
+Ingest is the number that matters for "new data lands": the rollups the detectors read contain
+the batch 22.4 seconds after the file does, verified by reconciling raw against `rollup_5m`,
+`rollup_1h` and `rollup_1d` for the batch window. The 51–59s figure is almost entirely the
+language model writing prose for a dozen cases; the analysis inside it is the 3s one.
+
+### What it produced
+
+Five daily runs over 2026-07-06 to 2026-07-10:
+
+| | |
+|---|---|
+| Cells tested | 73,665 across 10 metrics |
+| Cases opened | 70 — 43 localized, 27 unlocalized |
+| Candidates evaluated | 2,846 |
+| Trace steps recorded | 3,654 |
+| Coverage gaps recorded | 7,982 |
+| Narratives verified against the computed bundle | 57 |
+
+### The diagnosis, and the miss
+
+The aggregate signal is unmistakable and needs no model to see: overall fill rate runs 0.7930,
+0.7941, then **0.7314, 0.7324**, then back to 0.7935. Something broke on 8–9 July and recovered.
+
+The true cause is **`os_version = iOS 17.5`**, and the evidence is a query anyone can rerun:
+
+```sql
+SELECT
+  round(sumIf(fills,    toDate(bucket) IN ('2026-07-08','2026-07-09'))
+      / sumIf(requests, toDate(bucket) IN ('2026-07-08','2026-07-09')), 4) AS incident,
+  round(sumIf(fills,    toDate(bucket) IN ('2026-07-06','2026-07-07','2026-07-10'))
+      / sumIf(requests, toDate(bucket) IN ('2026-07-06','2026-07-07','2026-07-10')), 4) AS normal
+FROM rollup_1d
+WHERE combo = 'os_version' AND key_a = 'iOS 17.5' AND bucket >= '2026-07-06'
+```
+
+`0.4772` against `0.7957` — a **40.0% relative collapse** over 115,642 requests. Every finer
+crossing of iOS 17.5 lands between −39.4% and −40.5%: by publisher tier (−40.5, −39.8, −40.2),
+by ad format (−40.4, −39.9, −39.4), by region, country and category alike. That uniformity is
+the signature of a single-dimension cause, and it makes iOS 17.5 both minimal and complete.
+
+**The pipeline did not name it for fill rate.** It reported `publisher_tier = tier_3` at −24.4%
+on both days. It did reach `os_version = iOS 17.5` on 9 July through RPR, so the segment was
+within the lattice and testable — the fill-rate call specifically went to a passenger.
+
+The cause of the miss is measurable rather than mysterious. Across the June/July boundary:
+
+| Per app, June versus July | Correlation |
+|---|---|
+| Request volume | **1.00** |
+| Fill rate | **−0.05** |
+
+Entity popularity carries across the boundary exactly; entity *behaviour* was redrawn along with
+the dimension attributes. So historical baselines remain sound for counts and for global
+aggregates, and are meaningless for segment-level rates — and the detector trusted them anyway.
+`publisher_tier = tier_3` averaged 0.82 in June and 0.67 across every normal July day, so its
+June baseline manufactured a 24% deficit that had nothing to do with the incident.
+
+The existing holdout cannot catch this. It splits the window and re-tests both halves, but
+compares both against the *same* baseline, so it validates the selection rather than the
+baseline. Work is in progress on baseline selection by backtest: score each candidate baseline
+on held-out normal periods, use whichever actually predicts, and refuse to localize a rate when
+none of them do. That is a general safeguard rather than a rule fitted to this release — on the
+build corpus it keeps the weekly-aligned baseline unchanged.
+
+Nothing in the codebase encodes anything learned from this release. The two fixes it produced —
+a case must quote a test of its own metric, and dictionaries must be verified per node — are
+both defects that predate it and would corrupt any dataset.
+
+---
+
 ## The console
 
 `http://localhost:3000`. Four things you can do with a case:
@@ -391,7 +523,7 @@ window-versus-window comparison can see, and a **clean** window with nothing pla
 all. That last one is the one that matters most: a detector is only as good as its willingness
 to return nothing, and the clean case is the only test that can catch an invented incident.
 
-The suite is 476 tests over the statistics, the counterfactuals, the rate/mix decomposition,
+The suite is 479 tests over the statistics, the counterfactuals, the rate/mix decomposition,
 the confidence scoring, the schema, and the narration guard, and it runs in about four seconds
 without touching the network.
 
@@ -435,7 +567,26 @@ that never appears is indistinguishable from a metric with nothing wrong. Failur
 counted in the summary, listed before the case table, and recorded in the run status; the
 all-clear prints only when the run earned it.
 
+**A case could quote another metric's test.** A case takes its name from a finding and its
+numbers from the localization, and the search for that finding matched on segment alone. Its
+fallback pool is the whole sweep, so a segment that moved in two metrics could hand a fill-rate
+localization the *requests* finding for the same cell — reaching ClickHouse as
+`metric=requests, observed=0.599`, a request count of 0.6. The finding must now match the
+localization's metric as well as its segment.
+
+**Dictionary staleness silently misattributed a whole batch.** See [the unseen
+bundle](#a-bug-this-found-dictionary-staleness-on-a-multi-node-service); reloads are now
+cluster-wide and each node's dictionary is checked against its source table.
+
 ### Known and unfixed
+
+- **The baseline is never validated.** The detector assumes a trailing weekly-aligned history
+  predicts the window under test and has no way to notice when it does not. On the unseen
+  release, per-app fill rate correlated **−0.05** across the boundary while volume correlated
+  **1.00**, and the stale baseline sent the headline fill-rate verdict to a passenger segment.
+  The holdout does not cover this: it re-tests both halves of the window against the same
+  baseline, so it validates selection, not the baseline. Baseline selection by backtest is in
+  progress.
 
 - **No trend model.** The baseline is a trailing seasonal level, so a persistent drift is
   partly absorbed into the thing it would have to be measured against. Global requests rose

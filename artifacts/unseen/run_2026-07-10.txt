@@ -1,0 +1,99 @@
+Investigating 2026-07-10 00:00 to 2026-07-11 00:00 at 1h grain
+08:11:58 INFO    verdict.pipeline: Prefetched 1,721 cells across 46 combos in one query
+08:12:01 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:03 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:05 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:06 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:06 INFO    openai._base_client: Retrying request to /chat/completions in 0.484891 seconds
+08:12:06 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:06 INFO    openai._base_client: Retrying request to /chat/completions in 0.967543 seconds
+08:12:08 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:08 WARNING verdict.llm: Narration call to https://generativelanguage.googleapis.com/v1beta/openai/ failed: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 15, model: gemini-3.5-flash-lite\nPlease retry in 51.964631209s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.5-flash-lite'}, 'quotaValue': '15'}]}, {'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '51s'}]}}]
+08:12:08 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:08 INFO    openai._base_client: Retrying request to /chat/completions in 0.476888 seconds
+08:12:09 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:09 INFO    openai._base_client: Retrying request to /chat/completions in 0.887591 seconds
+08:12:10 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:10 WARNING verdict.llm: Narration call to https://generativelanguage.googleapis.com/v1beta/openai/ failed: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 15, model: gemini-3.5-flash-lite\nPlease retry in 49.552374253s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.5-flash-lite'}, 'quotaValue': '15'}]}, {'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '49s'}]}}]
+08:12:11 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:11 INFO    openai._base_client: Retrying request to /chat/completions in 0.419642 seconds
+08:12:11 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:11 INFO    openai._base_client: Retrying request to /chat/completions in 0.983138 seconds
+08:12:12 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:12 WARNING verdict.llm: Narration call to https://generativelanguage.googleapis.com/v1beta/openai/ failed: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 15, model: gemini-3.5-flash-lite\nPlease retry in 47.018290322s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'model': 'gemini-3.5-flash-lite', 'location': 'global'}, 'quotaValue': '15'}]}, {'@type': 'type.googleapis.com/google.rpc.RetryInfo', 'retryDelay': '47s'}]}}]
+08:12:14 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:15 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 429 Too Many Requests"
+08:12:15 INFO    openai._base_client: Retrying request to /chat/completions in 0.474556 seconds
+08:12:18 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:20 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:23 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:25 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:28 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:32 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:35 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:38 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:41 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:44 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:47 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+08:12:47 INFO    verdict.pipeline: Collapsed 3 case(s) that reached the same conclusion
+
+run ea41702afb50464e864d904d01f9e300: 14,718 cells tested across 10 metrics, 
+6198 findings survived correction, 15 case(s), 1629 coverage gap(s)
+
+                                     Cases                                      
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┳━━━━━━━━┓
+┃ Metric   ┃ Verdict ┃ Segment  ┃ Observ… ┃ Expected ┃  Effect ┃ Conf ┃ Impact ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━╇━━━━━━━━┩
+│ fill_ra… │ locali… │ categor… │  0.7824 │  0.74295 │   +5.3% │ 0.95 │     5* │
+│ revenue  │ locali… │ device_… │   51.46 │   95.968 │  -46.4% │ 0.75 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ rpr      │ locali… │ ad_form… │ 0.0029… │ 0.00456… │  -34.9% │ 0.68 │    -61 │
+│ ecpm     │ locali… │ ad_form… │  4.2111 │   6.5474 │  -35.7% │ 0.67 │    -63 │
+│ ctr      │ locali… │ device_… │ 0.01683 │ 0.00756… │ +122.4% │ 0.64 │        │
+│          │         │ Note 12  │         │          │         │      │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ vertica… │         │          │         │      │        │
+│ ctr      │ locali… │ categor… │ 0.0038… │ 0.011132 │  -65.4% │ 0.59 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ region=… │         │          │         │      │        │
+│ revenue  │ locali… │ country… │  101.57 │   55.997 │  +81.4% │ 0.49 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ region=… │         │          │         │      │        │
+│ requests │ unloca… │ device_… │  39,569 │    7,397 │ +434.9% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ fills    │ unloca… │ device_… │  31,468 │  5,928.4 │ +430.8% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ impress… │ unloca… │ device_… │  30,862 │  5,816.8 │ +430.6% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ clicks   │ unloca… │ country… │     291 │   11.446 │ +2442.… │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ requests │ unloca… │ categor… │  28,568 │   59,968 │  -52.4% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ impress… │ unloca… │ device_… │   2,495 │   10,452 │  -76.1% │ 0.00 │        │
+│          │         │ 7 AND    │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 13       │         │          │         │      │        │
+│ fills    │ unloca… │ device_… │   2,553 │   10,702 │  -76.1% │ 0.00 │        │
+│          │         │ 7 AND    │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 13       │         │          │         │      │        │
+│ clicks   │ unloca… │ categor… │     223 │   439.14 │  -49.2% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+└──────────┴─────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+* revenue reached through a chain of estimates; see impact_json for the basis.
+Coverage: 1,629 cell(s) could not be tested (850 below_detection_floor, 36 
+no_sampling_model, 743 non_positive_value)
+
+Persisted as run ea41702afb50464e864d904d01f9e300

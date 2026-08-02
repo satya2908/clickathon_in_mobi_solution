@@ -23,7 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from verdict.config import load_config  # noqa: E402
 from verdict.db import ClickHouse  # noqa: E402
-from verdict.load import FACT_COLUMNS, assert_not_lfs_stub  # noqa: E402
+from verdict.load import (  # noqa: E402
+    FACT_COLUMNS,
+    assert_not_lfs_stub,
+    reload_dictionaries,
+    verify_dictionaries,
+)
 
 
 def main(path_str: str) -> int:
@@ -32,6 +37,13 @@ def main(path_str: str) -> int:
 
     cfg = load_config()
     ch = ClickHouse(cfg.clickhouse)
+
+    # The rollups resolve dimensions through dictGet as the rows go in, so a node serving a stale
+    # dictionary attributes the whole batch to the previous dimension values without erroring.
+    # Checked before the insert rather than after, because afterwards the only repair is a
+    # rebuild.
+    reload_dictionaries(ch)
+    verify_dictionaries(ch)
 
     pf = pq.ParquetFile(path)
     rows, size = pf.metadata.num_rows, path.stat().st_size
