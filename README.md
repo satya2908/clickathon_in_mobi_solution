@@ -154,6 +154,35 @@ have detected.
 - *Holdout* — split the window in half. Does the effect reproduce in both? An effect present
   in one half is a spike with a story attached.
 
+### Rates or traffic
+
+A fill rate falling from 75% to 68% has two entirely different explanations. Either a segment
+started failing to fill, which is an incident and someone's integration is broken, or every
+segment is filling exactly as well as it always did and more of the traffic arrived at the
+segment that was always worse, which is a demand-mix story and not a fault at all.
+
+The counterfactual cannot tell these apart. Removing the segment repairs the parent whether
+that segment broke or merely grew, so a system that only measures each segment's own rate
+movement will report the second as the first — and page the wrong team.
+
+So the movement is decomposed. Writing an aggregate ratio as a weighted mean of its segments'
+own rates, `R = Σ wᵢrᵢ`, the change between baseline and observed splits exactly three ways:
+
+| Term | What it is |
+|---|---|
+| Rate | `Σ wᵢ⁰(rᵢ¹ − rᵢ⁰)` — rates moved, traffic shares held at baseline |
+| Mix | `Σ (wᵢ¹ − wᵢ⁰)(rᵢ⁰ − R⁰)` — shares moved toward segments whose rates already differed |
+| Interaction | `Σ (wᵢ¹ − wᵢ⁰)(rᵢ¹ − rᵢ⁰)` — both moved together |
+
+The identity is exact, not a first-order approximation, and the three sum to the observed
+movement. Interaction is kept visible rather than distributed across the other two as LMDI
+would, because a large interaction term is itself the finding: rate and mix moved together and
+no clean attribution exists.
+
+On the Android 15 fill incident this reports −0.0343 of a −0.0344 movement as within-segment
+rate and essentially nothing as mix — the right answer for a genuine outage, now demonstrated
+rather than assumed. The split appears as its own step in the investigation trace.
+
 **Score.** Confidence is a weighted reading of five components — significance, sufficiency,
 minimality, stability, separation — each published with the number, the weight, and a sentence
 saying what it measured. A component that could not be tested scores nothing and says so
@@ -362,9 +391,9 @@ window-versus-window comparison can see, and a **clean** window with nothing pla
 all. That last one is the one that matters most: a detector is only as good as its willingness
 to return nothing, and the clean case is the only test that can catch an invented incident.
 
-The suite is 462 tests over the statistics, the counterfactuals, the confidence scoring, the
-schema, and the narration guard, and it runs in about four seconds without touching the
-network.
+The suite is 476 tests over the statistics, the counterfactuals, the rate/mix decomposition,
+the confidence scoring, the schema, and the narration guard, and it runs in about four seconds
+without touching the network.
 
 ```bash
 pytest -q
@@ -397,6 +426,15 @@ a `screening` field naming what actually happened — Benjamini-Hochberg, a fixe
 threshold, or a post-hoc re-test of a cell the localizer had already chosen — and the
 confidence component gives the right reason for capping each.
 
+**Mix shift could be reported as segment degradation.** See [Rates or
+traffic](#rates-or-traffic) below; this is now decomposed and published.
+
+**A failed localization read as a clean window.** An exception during localization was logged
+at warning level and skipped, so the run reported success with a shorter case list — and a case
+that never appears is indistinguishable from a metric with nothing wrong. Failures are now
+counted in the summary, listed before the case table, and recorded in the run status; the
+all-clear prints only when the run earned it.
+
 ### Known and unfixed
 
 - **No trend model.** The baseline is a trailing seasonal level, so a persistent drift is
@@ -404,9 +442,6 @@ confidence component gives the right reason for capping each.
   8.55% across four weekly steps here while sitting only 5.25% above their trailing baseline. A
   fixed-anchor drift guard was specified and never built; the settings for it have been removed
   rather than left in the config implying a capability that does not exist.
-- **Mix shift is not separated from rate change.** An aggregate ratio can move because a
-  segment's own rate degraded or because traffic shifted toward a segment that was always
-  worse. These need different responses, and the candidate score measures only the first.
 - **Sparse count tests are a normal approximation to a quasi-Poisson model** and are
   overconfident in the tail where expected counts are small. Counts also dominate the case
   list, 148 of 153 cases across all runs to date.
@@ -435,6 +470,7 @@ identification. "This segment accounts for the movement" is supportable from wha
 src/verdict/
   detect.py structural.py   the two detectors, and dispersion estimation
   localize.py               the counterfactuals: sufficiency, minimality, maximality, holdout
+  decompose.py              rate versus traffic mix, as an exact identity
   confidence.py             the five scored components
   narrate.py llm.py         prose, and the numeric guard that can reject it
   stats.py                  baselines, intervals, corrections
