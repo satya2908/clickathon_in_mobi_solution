@@ -523,7 +523,7 @@ window-versus-window comparison can see, and a **clean** window with nothing pla
 all. That last one is the one that matters most: a detector is only as good as its willingness
 to return nothing, and the clean case is the only test that can catch an invented incident.
 
-The suite is 479 tests over the statistics, the counterfactuals, the rate/mix decomposition,
+The suite is 493 tests over the statistics, the counterfactuals, the rate/mix decomposition,
 the confidence scoring, the schema, and the narration guard, and it runs in about four seconds
 without touching the network.
 
@@ -577,6 +577,14 @@ localization's metric as well as its segment.
 **Dictionary staleness silently misattributed a whole batch.** See [the unseen
 bundle](#a-bug-this-found-dictionary-staleness-on-a-multi-node-service); reloads are now
 cluster-wide and each node's dictionary is checked against its source table.
+
+**The correction was sizing its family from the wrong number.** Benjamini-Hochberg needs the
+count of hypotheses *tested*, not the count of p-values handed to it, and every threshold is
+`alpha*k/m` — so understating `m` raises all of them at once. The sweep accumulated each
+metric's findings and gaps by hand and left `tested_cells` behind, so the correction always
+received zero and fell back to the number of findings. Latent while every tested cell yields a
+finding, which is true under the shipped `detect_rises: true`, and silently permissive the
+moment it is not. The sweep now merges results whole, and two tests pin the count.
 
 ### Known and unfixed
 

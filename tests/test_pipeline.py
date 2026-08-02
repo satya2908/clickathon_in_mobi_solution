@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from verdict.config import Config
 from verdict.detect import Finding
 from verdict.localize import Candidate, Localization
-from verdict.pipeline import _finding_for_accused, for_metric
+from verdict.metrics import MetricRegistry
+from verdict.pipeline import _finding_for_accused, detect_all, for_metric
 from verdict.query import Counters, Segment, Window
 from verdict.stats import TestResult
 from verdict.trace import Step
@@ -134,3 +136,68 @@ class TestACaseQuotesATestOfItsOwnMetric:
         in_group = _finding("fill_rate", observed=0.59902, expected=0.78398, p_value=1e-4)
         elsewhere = _finding("fill_rate", observed=0.59902, expected=0.78398, p_value=1e-30)
         assert _finding_for_accused(loc, [in_group], [elsewhere]) is in_group
+
+
+class LatticeReader:
+    """Serves one combo's cells with history, so the sweep can run without a database."""
+
+    def __init__(self, cells: dict[Segment, list[Counters]], combo: str = "region") -> None:
+        self.cells = cells
+        self.combo = combo
+
+    def prefetch_lattice(self, combos, window, weeks):  # noqa: ARG002
+        return 0
+
+    def slice_with_history(self, combo, window, weeks):  # noqa: ARG002
+        return self.cells if combo == self.combo else {}
+
+    def slice(self, combo, window):  # noqa: ARG002
+        return {seg: arms[0] for seg, arms in self.cells.items()} if combo == self.combo else {}
+
+
+class TestTheSweepCountsWhatItTested:
+    """The correction sizes its family from `tested_cells`, so losing that count makes
+    Benjamini-Hochberg silently permissive: every threshold is alpha*k/m, and a smaller m
+    raises all of them. `detect_all` used to copy findings and gaps across from each metric's
+    result by hand and leave the count behind, so the family arriving at the correction was
+    always zero and collapsed to the number of findings."""
+
+    def _world(self) -> dict[Segment, list[Counters]]:
+        # Five arms: the window, then four aligned baseline weeks.
+        steady = [Counters(requests=10_000) for _ in range(5)]
+        risen = [Counters(requests=20_000)] + [Counters(requests=10_000) for _ in range(4)]
+        return {
+            Segment((("region", "APAC"),)): list(steady),
+            Segment((("region", "EU"),)): list(steady),
+            Segment((("region", "NAM"),)): risen,
+        }
+
+    def _run(self, **overrides):
+        cfg = Config.model_validate(
+            {
+                "clickhouse": {"host": "localhost", "database": "test"},
+                "run": {"data_dir": "."},
+                "llm": {"enabled": False},
+            }
+        )
+        for key, value in overrides.items():
+            setattr(cfg.detection, key, value)
+        window = Window(start=datetime(2026, 7, 8), end=datetime(2026, 7, 9), grain="1h")
+        return detect_all(
+            LatticeReader(self._world()),
+            MetricRegistry.load("config/metrics.yaml"),
+            cfg,
+            window,
+            metrics=["requests"],
+            structural=False,
+        )
+
+    def test_the_count_reaches_the_caller(self):
+        temporal, _ = self._run()
+        assert temporal.tested_cells > 0
+
+    def test_it_counts_cells_rather_than_findings(self):
+        """With rises ignored, most tested cells yield no finding. The family is still every
+        cell that was tested, which is the case the lost count would have understated."""
+        temporal, _ = self._run(detect_rises=False)
+        assert temporal.tested_cells > len(temporal.findings)

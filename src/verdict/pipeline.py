@@ -26,6 +26,7 @@ being quietly pooled into a family they do not belong to.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import uuid
@@ -108,7 +109,24 @@ class InvestigationResult:
 
     @property
     def publishable(self) -> list[Case]:
-        return [c for c in self.cases if c.confidence_value >= 0.0 and c.verdict_kind == "localized"]
+        """Cases whose confidence actually cleared the bar, not merely all of them.
+
+        This read `confidence_value >= 0.0`, which every case satisfies because the score is a
+        weighted mean of non-negative components. It was a filter in name only. The threshold
+        and the component-count rule already live on the confidence object, which is where the
+        decision belongs; this defers to it rather than keeping a second, weaker copy.
+        """
+        out: list[Case] = []
+        for case in self.cases:
+            if case.verdict_kind != "localized":
+                continue
+            try:
+                cleared = json.loads(case.confidence_json).get("publishable")
+            except (TypeError, ValueError):
+                cleared = False
+            if cleared:
+                out.append(case)
+        return out
 
     @property
     def temporal_disabled(self) -> bool:
@@ -299,8 +317,13 @@ def detect_all(
     for name in names:
         if temporal_enabled:
             result = detect_temporal(reader, registry, cfg.detection, name, window, tracer=tracer, correct=False)
-            temporal.findings.extend(result.findings)
-            temporal.gaps.extend(result.gaps)
+            # extend() rather than extending the lists by hand, because it also carries
+            # tested_cells. Benjamini-Hochberg sizes its family from that count, and copying
+            # only the findings across left it at zero -- so the family collapsed to the number
+            # of findings and every threshold was computed against a denominator far smaller
+            # than the number of tests actually run. Latent while every tested cell yields a
+            # finding, and silently permissive the moment one does not.
+            temporal.extend(result)
 
         if not structural:
             continue
@@ -309,8 +332,7 @@ def detect_all(
         except Exception as exc:  # noqa: BLE001 - one metric's failure must not end the scan
             log.warning("Structural scan failed for %s: %s", name, exc)
             continue
-        struct.findings.extend(found.findings)
-        struct.gaps.extend(found.gaps)
+        struct.extend(found)
 
     return temporal, struct
 

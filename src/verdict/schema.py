@@ -539,9 +539,15 @@ def migration_statements() -> list[Statement]:
             "migrate_coverage_resolvable_effect",
             "ALTER TABLE coverage_ledger ADD COLUMN IF NOT EXISTS resolvable_effect Float64 DEFAULT -1",
         ),
-        # AFTER duration_ms so the column order matches the DDL: inserts are positional, and a
-        # column appended at the end here but declared mid-table there would put offsets into
-        # span_id on any instance that took the migration path.
+        # AFTER duration_ms so a migrated table still matches its own DDL. Note that this is
+        # tidiness, not safety: `ClickHouse.insert` names its columns explicitly and the driver
+        # binds by name, so appending at the end would be harmless. The `cases` table proves it
+        # -- nine ALTERs without AFTER have left its physical order three columns adrift of
+        # CASE_COLUMNS, and every value still lands correctly.
+        #
+        # The real hazard is any write that bypasses that column list. A bare
+        # `INSERT INTO ... VALUES`, or `insert_arrow`, which takes no column names, does bind by
+        # position and would misfile every value on a table whose order has drifted.
         Statement(
             "migrate_steps_offset_ms",
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS offset_ms UInt32 DEFAULT 0 AFTER duration_ms",

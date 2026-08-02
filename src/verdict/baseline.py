@@ -104,7 +104,8 @@ def flagged_share(
         except Exception as exc:  # noqa: BLE001 - an audit must not be able to end a run
             log.warning("Baseline audit could not scan %s over %s: %s", name, window.label(), exc)
             continue
-        scan.findings.extend(found.findings)
+        # extend(), so tested_cells reaches the correction and the family is sized correctly.
+        scan.extend(found)
 
     tested = len(scan.findings)
     if not tested:
