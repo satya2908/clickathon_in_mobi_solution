@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .config import Config, ConfigError, load_config
-from .db import ClickHouse
+from .db import ClickHouse, QueryError
 from .metrics import MetricRegistry
 
 if TYPE_CHECKING:
@@ -445,8 +445,13 @@ def ingest_cmd(
 
     try:
         report = ingest(ch, registry, path)
-    except LoadError as exc:
-        console.print(f"[bold red]Ingest failed[/]\n{exc}")
+    except (LoadError, QueryError) as exc:
+        # QueryError alongside LoadError because the operational failures here are evenly split
+        # between the two -- a malformed batch is a LoadError, an unreachable or wrong database
+        # is a QueryError -- and only one of them was being caught. The other arrived as a Rich
+        # traceback, which is ten kilobytes of box-drawing wrapped around one sentence and is
+        # what the console's ingest panel would then show a reader.
+        console.print(f"[bold red]Ingest failed[/]\n{_reason(exc)}")
         raise typer.Exit(1) from exc
 
     size = Table(title="Ingested", header_style="bold")
@@ -498,6 +503,27 @@ def ingest_cmd(
             persist=not no_persist, narrate=not no_llm, max_cases=max_cases,
         )
         console.print()
+
+
+@app.command("serve")
+def serve_cmd(
+    host: str = typer.Option("0.0.0.0", "--host"),  # noqa: S104 - inside a Compose network
+    port: int = typer.Option(8158, "--port"),
+    root: str = typer.Option(None, "--root", help="Paths outside this are refused. Defaults to VERDICT_DATA_DIR."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Expose `ingest` over HTTP so the console can drive it.
+
+    The console container has no Python and this one has no web server, so the ingest button
+    needs somewhere to send its request. This runs the CLI in a subprocess rather than calling
+    the pipeline directly, which keeps one implementation of the ingest sequence rather than two.
+
+    Unauthenticated and single-job. It is meant for a Compose network, not an open port.
+    """
+    _setup_logging(verbose)
+    from .serve import serve
+
+    serve(host=host, port=port, root=root)
 
 
 @app.command("investigate")
@@ -640,6 +666,17 @@ def version_cmd() -> None:
     from . import __version__
 
     console.print(f"verdict {__version__}")
+
+
+def _reason(exc: Exception) -> str:
+    """The sentence in an exception, without the stack that carried it.
+
+    ClickHouse errors arrive with the driver's URL, version banner and SQL appended, which is
+    useful in a log and noise in a console panel. The first line is the part that says what went
+    wrong.
+    """
+    first = str(exc).strip().splitlines()
+    return first[0].strip() if first else exc.__class__.__name__
 
 
 def main() -> None:

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CasePanel } from './CasePanel';
 import { CaseTable, type Sort } from './CaseTable';
+import { IngestPanel } from './IngestPanel';
 import { MetricChart } from './MetricChart';
 import { SearchIcon } from './icons';
 import { TopBar } from './TopBar';
@@ -39,6 +40,7 @@ interface Props {
   spans: number;
   coverageGaps: number;
   recommendationsEnabled: boolean;
+  ingestEnabled: boolean;
   empty: boolean;
 }
 
@@ -102,6 +104,7 @@ export function Console({
   spans,
   coverageGaps,
   recommendationsEnabled,
+  ingestEnabled,
   empty,
 }: Props) {
   const [kind, setKind] = useState<VerdictKind | null>(null);
@@ -377,6 +380,8 @@ export function Console({
                     </span>
                   </label>
                 )}
+
+                {ingestEnabled && <IngestPanel />}
 
                 <div className="row" style={{ gap: 6, width: 232 }}>
                   <span className="dim2" style={{ display: 'inline-flex' }}>

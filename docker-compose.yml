@@ -96,8 +96,10 @@ services:
       - ./config:/etc/verdict:ro
       - ${DATA_DIR:-./data}:/data:ro
       - ./out:/out
-    # Long-lived so `docker compose exec verdict verdict <command>` works during a demo.
-    entrypoint: ["sleep", "infinity"]
+    # Serves the ingest endpoint the console's "Ingest release" control posts to, on the Compose
+    # network only -- it is unauthenticated and deliberately has no host port. Still long-lived,
+    # so `docker compose exec verdict verdict <command>` works during a demo exactly as before.
+    entrypoint: ["verdict", "serve", "--port", "8158", "--root", "/data"]
 
   # ---- Console, http://localhost:3000 ----
   #
@@ -132,6 +134,12 @@ services:
       # Called by the server rather than the browser. The optional remediation container joins
       # this Compose network and is reached directly by Docker DNS. Host-side `next dev` still
       # defaults to localhost. The feature gate is server-side and defaults closed.
+      # The "Ingest release" control. Off unless switched on, because it runs a program against a
+      # path the browser supplied. The engine resolves that path against its own /data mount and
+      # refuses anything outside it; this side only forwards.
+      INGEST_ENABLED: ${INGEST_ENABLED:-false}
+      VERDICT_INGEST_URL: ${VERDICT_INGEST_URL:-http://verdict:8158}
+
       RECOMMENDATIONS_ENABLED: ${RECOMMENDATIONS_ENABLED:-false}
       RECOMMEND_URL: ${RECOMMEND_URL:-http://cursor-cli-agent:8157}
       RECOMMEND_API_TOKEN: ${CURSOR_SERVICE_API_TOKEN:-}

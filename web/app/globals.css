@@ -732,6 +732,32 @@ html { scrollbar-color: var(--scroll) transparent; }
 .aitog .lbl .n.busy { display: inline-flex; align-items: center; gap: 4px; }
 .spin.xs { width: 8px; height: 8px; border-width: 1.5px; margin-top: 0; }
 
+/* ---------------------------------------------------------- ingest
+
+   A popover rather than a modal. Ingesting a release takes minutes, and the run it replaces is
+   the thing an operator is comparing against while they wait; a modal would hide exactly the
+   screen they want to keep reading. */
+.ingest { position: relative; }
+.ingpop {
+  position: absolute; top: 30px; right: 0; z-index: 40; width: 520px; padding: 12px;
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+}
+.ingrow { display: flex; gap: 6px; align-items: center; }
+.ingrow .grow { flex: 1 1 auto; min-width: 0; }
+.fchip.go { height: 26px; white-space: nowrap; }
+.ingnote { margin: 8px 2px 0; font: 11px/1.5 var(--sans); color: var(--tx3); }
+.ingres { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ingtop { display: flex; align-items: baseline; gap: 8px; font: 12px var(--sans); }
+.ingres.ok .ingtop strong { color: var(--ok, #4ac08a); }
+.ingres.bad .ingtop strong { color: var(--bad, #e5644e); }
+.ingerr { margin: 6px 0 0; font: 11px/1.5 var(--mono); color: var(--bad, #e5644e); }
+.ingout {
+  margin: 8px 0 10px; padding: 8px; max-height: 220px; overflow: auto;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+  font: 11px/1.5 var(--mono); color: var(--tx2); white-space: pre-wrap; word-break: break-word;
+}
+
 /* ---------------------------------------------------------- narrative two-column
 
    Prose keeps its measure; the figures it should be checked against sit beside it instead of
