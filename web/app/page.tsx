@@ -1,4 +1,5 @@
 import { Console } from '@/components/Console';
+import { recommendationsEnabled } from '@/lib/features';
 import { getDashboard } from '@/lib/queries';
 
 /** Read on every request. A root-cause console that serves a cached page is showing you
@@ -18,6 +19,7 @@ export default async function Page() {
       series={series}
       spans={spans}
       coverageGaps={coverageGaps}
+      recommendationsEnabled={recommendationsEnabled()}
       empty={empty}
     />
   );

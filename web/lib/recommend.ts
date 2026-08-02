@@ -17,12 +17,20 @@ import type { Case, Recommendation, RecommendationSet } from './types';
  *  useful signal about advice quality than any confidence label a model assigns itself. */
 
 const SERVICE = process.env.RECOMMEND_URL || 'http://localhost:8157';
+const SERVICE_TOKEN = process.env.RECOMMEND_API_TOKEN?.trim() || '';
 
 // Generation and validation are two full agent turns; a completed run measured about 110
 // seconds. The ceiling is generous because timing out on work that is nearly done wastes the
 // whole spend, and the caller polls rather than blocks.
 const TIMEOUT_MS = Number(process.env.RECOMMEND_TIMEOUT_MS || 360_000);
 const POLL_MS = 3_000;
+
+function serviceHeaders(json = false): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (json) headers['Content-Type'] = 'application/json';
+  if (SERVICE_TOKEN) headers.Authorization = `Bearer ${SERVICE_TOKEN}`;
+  return headers;
+}
 
 interface JobRecord {
   job_id: string;
@@ -84,7 +92,7 @@ say so rather than inventing a segment to blame.`;
 async function post(path: string, body: unknown): Promise<Response> {
   return fetch(`${SERVICE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: serviceHeaders(true),
     body: JSON.stringify(body),
     cache: 'no-store',
   });
@@ -98,10 +106,7 @@ function connectionHint(): string {
     return 'RECOMMEND_URL must be a valid absolute URL.';
   }
   if (host === 'cursor-cli-agent') {
-    return (
-      'Start the cursor-cli-agent Compose service and ensure it is attached to the ' +
-      'verdict_default Docker network.'
-    );
+    return 'Start the optional service with `./stack.sh up --with-ai`.';
   }
   if (host === 'host.docker.internal') {
     return (
@@ -142,7 +147,10 @@ export async function generate(c: Case): Promise<RecommendationSet> {
   let job: JobRecord | null = null;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, POLL_MS));
-    const res = await fetch(`${SERVICE}/v1/remediations/${job_id}`, { cache: 'no-store' });
+    const res = await fetch(`${SERVICE}/v1/remediations/${job_id}`, {
+      headers: serviceHeaders(),
+      cache: 'no-store',
+    });
     if (!res.ok) continue;
     job = (await res.json()) as JobRecord;
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') break;

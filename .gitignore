@@ -22,3 +22,7 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Local trust roots are injected as Docker secrets, never committed.
+services/cursor-cli-agent/certs/*
+!services/cursor-cli-agent/certs/README.md

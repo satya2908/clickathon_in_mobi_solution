@@ -2,11 +2,10 @@
 #
 #   docker compose up -d --build
 #
-# brings up everything a demo needs: the console on http://localhost:3000, the Verdict.AI chat
+# brings up the deterministic product: the console on http://localhost:3000, the Verdict.AI chat
 # it embeds on :3080, the MCP server that chat queries through, and the OTLP collector that
-# ships investigation traces to ClickHouse Cloud. Nothing is behind a profile except the
-# self-hosted telemetry backend, because a stack where half the product needs a second command
-# is a stack that gets demoed half-working.
+# ships investigation traces to ClickHouse Cloud. Cursor-generated remediation advice is
+# deliberately optional under the `recommendations` profile; use `./stack.sh up --with-ai`.
 #
 # Two ways to run the telemetry side, selected by compose profile. Both speak plain OTLP on
 # 4317/4318, so the application is identical either way and never knows which is running.
@@ -130,13 +129,70 @@ services:
       NEXT_PUBLIC_CHAT_URL: ${NEXT_PUBLIC_CHAT_URL:-http://localhost:${LIBRECHAT_PORT:-3080}}
       NEXT_PUBLIC_HYPERDX_URL: ${NEXT_PUBLIC_HYPERDX_URL:-https://hyperdx.clickhouse.cloud}
 
-      # Called by the server rather than the browser. The separately managed remediation
-      # container joins this Compose network and is reached directly by Docker DNS, avoiding
-      # host loopback forwarding entirely. Host-side `next dev` still defaults to localhost.
+      # Called by the server rather than the browser. The optional remediation container joins
+      # this Compose network and is reached directly by Docker DNS. Host-side `next dev` still
+      # defaults to localhost. The feature gate is server-side and defaults closed.
+      RECOMMENDATIONS_ENABLED: ${RECOMMENDATIONS_ENABLED:-false}
       RECOMMEND_URL: ${RECOMMEND_URL:-http://cursor-cli-agent:8157}
+      RECOMMEND_API_TOKEN: ${CURSOR_SERVICE_API_TOKEN:-}
+      RECOMMEND_TIMEOUT_MS: ${RECOMMEND_TIMEOUT_MS:-360000}
     extra_hosts:
       # Docker Desktop provides this automatically; Linux does not.
       - "host.docker.internal:host-gateway"
+
+  # ---- Optional Cursor CLI recommendations, http://localhost:8157 ----
+  #
+  # This image is not built or started during a normal `docker compose up`. `stack.sh` validates
+  # CURSOR_API_KEY, enables the server-side UI/API gate, and activates this profile together.
+  cursor-cli-agent:
+    profiles: ["recommendations"]
+    build:
+      context: ./services/cursor-cli-agent
+      dockerfile: Dockerfile
+      secrets:
+        - cursor_extra_ca
+    image: verdict-cursor-cli-agent:${VERDICT_TAG:-local}
+    container_name: verdict-cursor-cli-agent
+    restart: unless-stopped
+    depends_on: [mcp-clickhouse]
+    environment:
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+      CURSOR_SERVICE_API_TOKEN: ${CURSOR_SERVICE_API_TOKEN:-}
+      CURSOR_MODEL: ${CURSOR_MODEL:-cursor-grok-4.5-high-fast}
+      CURSOR_DEFAULT_MODEL: ${CURSOR_DEFAULT_MODEL:-}
+      CURSOR_REMEDIATION_MODEL: ${CURSOR_REMEDIATION_MODEL:-}
+      CURSOR_VALIDATION_MODEL: ${CURSOR_VALIDATION_MODEL:-}
+      CURSOR_AGENT_ENDPOINT: ${CURSOR_AGENT_ENDPOINT:-}
+      CURSOR_MAX_CONCURRENCY: ${CURSOR_MAX_CONCURRENCY:-4}
+      CURSOR_MAX_PENDING_JOBS: ${CURSOR_MAX_PENDING_JOBS:-20}
+      LOG_LEVEL: ${CURSOR_LOG_LEVEL:-INFO}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mcp-clickhouse}
+    ports:
+      - "127.0.0.1:${CURSOR_AGENT_PORT:-8157}:8157"
+    volumes:
+      # Mount only inspectable source/configuration, not the root .env or dataset.
+      - ./src:/workspace/src:ro
+      - ./web:/workspace/web:ro
+      - ./config:/workspace/config:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./sql:/workspace/sql:ro
+      - ./tests:/workspace/tests:ro
+      - ./services:/workspace/services:ro
+      - ./README.md:/workspace/README.md:ro
+      - ./pyproject.toml:/workspace/pyproject.toml:ro
+      - ./docker-compose.yml:/workspace/docker-compose.yml:ro
+      - cursor-agent-data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    secrets:
+      - source: cursor_extra_ca
+        target: cursor_extra_ca
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
 
   # ---- Verdict.AI, the conversational surface ----
   #
@@ -227,3 +283,10 @@ volumes:
   clickstack-logs:
   chat-db-data:
   librechat-images:
+  cursor-agent-data:
+
+secrets:
+  # The checked-in default is documentation, not a certificate. Corporate users point
+  # CURSOR_CA_CERT at a local PEM; BuildKit does not copy that source file into the context.
+  cursor_extra_ca:
+    file: ${CURSOR_CA_CERT:-./services/cursor-cli-agent/certs/README.md}

@@ -47,13 +47,26 @@ cp .env.example .env        # fill in CLICKHOUSE_HOST / CLICKHOUSE_PASSWORD
 ### With Docker
 
 ```bash
-docker compose up -d                          # whole stack: console, chat, tracing, MCP
+./stack.sh up                                 # product: console, chat, tracing, MCP
 docker compose exec verdict verdict schema apply
 docker compose exec verdict verdict load
 docker compose exec verdict verdict investigate --start 2026-07-05 --hours 24
 ```
 
-Then open the console. Everything else is reachable from it.
+Then open the console. Run `./stack.sh` with no arguments for the interactive menu; `down`,
+`status`, `logs [SERVICE]`, and `rebuild` are also available as non-interactive commands.
+
+Cursor-generated next actions are an optional capability, not a product dependency. Add
+`CURSOR_API_KEY` to `.env`, then start both stacks with one command:
+
+```bash
+./stack.sh up --with-ai
+```
+
+This activates the Compose `recommendations` profile and exposes the UI control, but leaves that
+control switched off until a user opts into model usage. A normal `./stack.sh up` does not build
+the Cursor image, hides the control, blocks the recommendation API, and stops an agent left over
+from an earlier AI-enabled run.
 
 | Surface | Where | What it is |
 |---|---|---|
@@ -63,7 +76,8 @@ Then open the console. Everything else is reachable from it.
 | MCP server | <http://localhost:8001/sse> | the SQL tool, on its own, for any MCP client |
 | HyperDX | hosted, with ClickHouse Cloud | every investigation as a distributed trace |
 
-Ports are overridable — `WEB_PORT`, `LIBRECHAT_PORT`, `MCP_PORT`, `HYPERDX_UI_PORT`.
+Ports are overridable — `WEB_PORT`, `LIBRECHAT_PORT`, `MCP_PORT`, `HYPERDX_UI_PORT`, and
+`CURSOR_AGENT_PORT` (only in AI mode).
 
 Traces go to the collector, which writes them to ClickHouse, and the HyperDX that ships with
 ClickHouse Cloud reads them from there — so the default needs no extra container. To run
@@ -375,10 +389,20 @@ unpriced for count metrics rather than being rounded to zero dollars.
 
 ### Actions
 
-A toggle, default off. When enabled, each case is sent to a remediation service twice: once to
-draft steps, and once more, in a separate session, to review the draft against the same
-evidence and drop what it cannot support. Both passes are advisory and labelled as such. The
-pipeline's verdicts do not depend on them.
+Actions have two independent gates. The deployment must be started with
+`./stack.sh up --with-ai`; otherwise the control is absent and the server rejects recommendation
+API requests. Even in AI mode, the user-facing toggle defaults off so merely running the
+container cannot spend model quota.
+
+When the toggle is enabled, each case is sent to the bundled Cursor CLI service twice: once to
+draft steps, and once more, in an isolated session, to review the draft against the same evidence
+and drop what it cannot support. Both passes are advisory and labelled as such. The pipeline's
+verdicts do not depend on them.
+
+The service lives in `services/cursor-cli-agent/`, runs non-root with a read-only source view,
+dropped capabilities, a bounded job store, and a read-only ClickHouse MCP allow-list. Set
+`CURSOR_SERVICE_API_TOKEN` in `.env` to require a bearer token between the Next.js server and the
+agent; the token is never sent to browser JavaScript.
 
 ---
 

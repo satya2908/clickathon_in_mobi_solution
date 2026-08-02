@@ -38,6 +38,7 @@ interface Props {
   series: Series[];
   spans: number;
   coverageGaps: number;
+  recommendationsEnabled: boolean;
   empty: boolean;
 }
 
@@ -93,7 +94,16 @@ const KIND_HINT: Record<VerdictKind, string> = {
   no_data: 'Too little traffic to decompose. Published so it is not silently dropped.',
 };
 
-export function Console({ run, runs, cases, series, spans, coverageGaps, empty }: Props) {
+export function Console({
+  run,
+  runs,
+  cases,
+  series,
+  spans,
+  coverageGaps,
+  recommendationsEnabled,
+  empty,
+}: Props) {
   const [kind, setKind] = useState<VerdictKind | null>(null);
   const [pri, setPri] = useState<number | null>(null);
   const [query, setQuery] = useState('');
@@ -144,7 +154,7 @@ export function Console({ run, runs, cases, series, spans, coverageGaps, empty }
   const store = (set: RecommendationSet) => setRecs(prev => new Map(prev).set(set.case_id, set));
 
   async function generateFor(caseId: string, force: boolean) {
-    if (!run) return;
+    if (!recommendationsEnabled || !run) return;
     setGenerating(caseId);
     try {
       const res = await fetch('/api/recommendations', {
@@ -180,7 +190,7 @@ export function Console({ run, runs, cases, series, spans, coverageGaps, empty }
   // Sequential on purpose. Firing seven at once buys a rate limit, and doing them in order
   // means the queue can be abandoned part-way with everything finished so far kept.
   useEffect(() => {
-    if (!recsOn || !run) return;
+    if (!recommendationsEnabled || !recsOn || !run) return;
     if (queued.current === run.run_id) return;
     queued.current = run.run_id;
 
@@ -215,7 +225,7 @@ export function Console({ run, runs, cases, series, spans, coverageGaps, empty }
       queued.current = null;
       setPending(0);
     };
-  }, [recsOn, run]);
+  }, [recommendationsEnabled, recsOn, run]);
 
   const recsReady = useMemo(
     () => [...recs.values()].filter(s => s.status === 'completed').length,
@@ -341,30 +351,32 @@ export function Console({ run, runs, cases, series, spans, coverageGaps, empty }
                   ))}
                 </div>
 
-                {/* Off by default. Everything else on this page is measured; this is a model
-                    proposing actions, and opting into that should be a decision rather than
-                    something a reader discovers already switched on. */}
-                <label className="aitog sp" title={AI_HINT}>
-                  <input
-                    type="checkbox"
-                    checked={recsOn}
-                    onChange={e => setRecsOn(e.target.checked)}
-                    aria-label="AI recommendations"
-                  />
-                  <span className="track">
-                    <span className="knob" />
-                  </span>
-                  <span className="lbl">
-                    AI Recommendations
-                    {recsOn && pending > 0 && (
-                      <span className="n busy" title={`${pending} case(s) still to generate`}>
-                        <span className="spin xs" />
-                        {pending}
-                      </span>
-                    )}
-                    {recsOn && pending === 0 && recsReady > 0 && <span className="n">{recsReady}</span>}
-                  </span>
-                </label>
+                {recommendationsEnabled && (
+                  /* Off by default. Everything else on this page is measured; this is a model
+                     proposing actions, and opting into that should be a decision rather than
+                     something a reader discovers already switched on. */
+                  <label className="aitog sp" title={AI_HINT}>
+                    <input
+                      type="checkbox"
+                      checked={recsOn}
+                      onChange={e => setRecsOn(e.target.checked)}
+                      aria-label="AI recommendations"
+                    />
+                    <span className="track">
+                      <span className="knob" />
+                    </span>
+                    <span className="lbl">
+                      AI Recommendations
+                      {recsOn && pending > 0 && (
+                        <span className="n busy" title={`${pending} case(s) still to generate`}>
+                          <span className="spin xs" />
+                          {pending}
+                        </span>
+                      )}
+                      {recsOn && pending === 0 && recsReady > 0 && <span className="n">{recsReady}</span>}
+                    </span>
+                  </label>
+                )}
 
                 <div className="row" style={{ gap: 6, width: 232 }}>
                   <span className="dim2" style={{ display: 'inline-flex' }}>
@@ -414,7 +426,7 @@ export function Console({ run, runs, cases, series, spans, coverageGaps, empty }
           c={openCase}
           onClose={close}
           recommendations={recs.get(openCase.case_id) ?? null}
-          recsEnabled={recsOn}
+          recsEnabled={recommendationsEnabled && recsOn}
           recsBusy={generating === openCase.case_id}
           onGenerate={force => generateFor(openCase.case_id, force)}
         />

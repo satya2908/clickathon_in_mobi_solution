@@ -1,0 +1,50 @@
+server:
+  host: 0.0.0.0
+  port: 8157
+  max_request_bytes: 8388608
+
+# These values are passed directly to `agent --model`.
+models:
+  default: cursor-grok-4.5-high-fast
+  remediation: cursor-grok-4.5-high-fast
+  validation: cursor-grok-4.5-high-fast
+  allow_request_override: false
+  allowed: []
+
+agent:
+  binary: agent
+  timeout_seconds: 300
+  max_concurrency: 4
+  max_interactive_requests: 10
+
+  # Advisory only: the repository is mounted read-only and Cursor permissions deny writes/shell.
+  mode: ask
+  trust_workspace: true
+  force: false
+  sandbox: disabled
+
+  workspace_root: /workspace
+  runtime_dir: /data/runtime
+  cursor_home: /data/cursor-home
+
+  prompt_file_threshold_bytes: 102400
+  max_prompt_bytes: 2097152
+  max_context_bytes: 5242880
+  api_key_env: CURSOR_API_KEY
+
+  # Same Compose network, so the service name and internal port are the stable address.
+  mcp_config:
+    mcpServers:
+      verdict-clickhouse:
+        url: http://mcp-clickhouse:8000/sse
+  mcp_allowed_servers: [verdict-clickhouse]
+
+remediation:
+  max_recommendations: 5
+  max_case_bytes: 2097152
+  max_pending_jobs: 20
+
+storage:
+  jobs_dir: /data/jobs
+  retention_days: 30
+  max_records: 1000

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { recommendationsEnabled } from '@/lib/features';
 import { getCases } from '@/lib/queries';
 import { generate, load, save } from '@/lib/recommend';
 
@@ -8,11 +9,20 @@ import { generate, load, save } from '@/lib/recommend';
 export const maxDuration = 800;
 export const dynamic = 'force-dynamic';
 
+function disabled() {
+  return NextResponse.json(
+    { error: 'AI recommendations are disabled for this deployment' },
+    { status: 503, headers: { 'Cache-Control': 'no-store' } },
+  );
+}
+
 /** GET returns whatever advice already exists, without generating any.
  *
  *  The toggle needs this: switching it on must show cached results immediately rather than
  *  regenerating work that has already been paid for. */
 export async function GET(req: Request) {
+  if (!recommendationsEnabled()) return disabled();
+
   const runId = new URL(req.url).searchParams.get('run') ?? '';
   if (!runId) return NextResponse.json({ error: 'run is required' }, { status: 400 });
 
@@ -34,6 +44,8 @@ export async function GET(req: Request) {
  *  could not generate advice for, which is different from one nobody has tried, and only the
  *  first of those should be retried automatically. */
 export async function POST(req: Request) {
+  if (!recommendationsEnabled()) return disabled();
+
   let body: { run?: string; case_id?: string; force?: boolean };
   try {
     body = await req.json();
