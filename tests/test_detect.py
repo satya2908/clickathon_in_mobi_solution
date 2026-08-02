@@ -22,9 +22,9 @@ from verdict.detect import (
     DetectionResult,
     Finding,
     _denominator_floor,
-    lattice_combos,
     apply_correction,
     estimate_dispersion,
+    lattice_combos,
 )
 from verdict.metrics import MetricRegistry
 from verdict.query import Counters, Segment, Window

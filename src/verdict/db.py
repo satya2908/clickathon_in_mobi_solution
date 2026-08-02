@@ -71,9 +71,19 @@ def as_utc(parameters: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def stamp_utc(value: Any) -> Any:
-    """Read one naive datetime as UTC. Anything else passes through untouched."""
+    """Read one naive datetime as UTC, descending into lists. Anything else passes through.
+
+    Lists matter as much as scalars: an ``Array(DateTime)`` parameter is bound element by
+    element, so a list left alone here reintroduces the local-time shift above one level down,
+    where it is harder to see -- the query runs, returns fewer rows than it should, and reports
+    no error.
+    """
     if isinstance(value, datetime) and value.tzinfo is None:
         return value.replace(tzinfo=UTC)
+    if isinstance(value, list):
+        return [stamp_utc(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(stamp_utc(item) for item in value)
     return value
 
 

@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -134,6 +135,7 @@ RUN_COLUMNS = (
     "cases_found",
     "status",
     "note",
+    "duration_ms",
 )
 
 # Metrics whose deviation converts to money without passing through another estimate. Everything
@@ -562,7 +564,7 @@ class CaseStore:
         now = _utc(datetime.now(UTC))
         self.ch.insert(
             "runs",
-            [[run_id, now, now, config_json, git_sha, trace_id, 0, "running", ""]],
+            [[run_id, now, now, config_json, git_sha, trace_id, 0, "running", "", 0]],
             RUN_COLUMNS,
             name="insert_run_open",
         )
@@ -578,6 +580,7 @@ class CaseStore:
         git_sha: str = "",
         trace_id: str = "",
         started_at: datetime | None = None,
+        duration_ms: int = 0,
     ) -> None:
         """Close the run out.
 
@@ -600,6 +603,7 @@ class CaseStore:
                     int(cases_found),
                     status,
                     note,
+                    int(duration_ms),
                 ]
             ],
             RUN_COLUMNS,
@@ -628,6 +632,52 @@ class CaseStore:
         )
         return str(rows[0][0]) if rows else ""
 
+    def find_recurrences(self, cases: Sequence[Case]) -> dict[str, str]:
+        """The same lookup as ``find_recurrence`` for a whole run, in one query.
+
+        Argmax rather than one correlated lookup per case: group the earlier cases by
+        fingerprint and take the case_id belonging to the largest detected_at.
+
+        Each fingerprint keeps its own cutoff, carried in a parallel array and looked up by
+        position, so this is not merely a cheaper approximation of the per-case query but the
+        same question asked once. A single shared cutoff would have been loose enough to hand
+        an early case a "previous" occurrence that happened after it.
+        """
+        wanted = [c for c in cases if not c.recurrence_of]
+        if not wanted:
+            return {}
+
+        # One entry per distinct fingerprint, cut off at the earliest case carrying it, which
+        # is the bound find_recurrence would apply to that case.
+        cutoff: dict[str, datetime] = {}
+        for case in wanted:
+            seen = cutoff.get(case.fingerprint)
+            if seen is None or case.detected_at < seen:
+                cutoff[case.fingerprint] = case.detected_at
+        fps = sorted(cutoff)
+
+        sql = """
+            SELECT fingerprint, argMax(case_id, detected_at) AS prior
+            FROM cases
+            WHERE fingerprint IN {fps:Array(String)}
+              AND detected_at < arrayElement({cutoffs:Array(DateTime)},
+                                             indexOf({fps:Array(String)}, fingerprint))
+              AND run_id NOT IN {runs:Array(String)}
+            GROUP BY fingerprint
+        """
+        rows = self.ch.query(
+            sql,
+            {
+                "fps": fps,
+                "cutoffs": [_utc(cutoff[f]) for f in fps],
+                "runs": sorted({c.run_id for c in wanted}),
+            },
+            name="find_recurrences",
+        )
+
+        prior = {str(r[0]): str(r[1]) for r in rows}
+        return {c.case_id: prior[c.fingerprint] for c in wanted if c.fingerprint in prior}
+
     def write_case(self, case: Case, *, link_recurrence: bool = True) -> None:
         if link_recurrence and not case.recurrence_of:
             try:
@@ -646,6 +696,62 @@ class CaseStore:
         steps = case.step_rows()
         if steps:
             self.ch.insert("case_steps", steps, STEP_COLUMNS, name="insert_steps")
+
+    def write_cases(self, cases: Sequence[Case], *, link_recurrence: bool = True) -> None:
+        """Write every case of a run in three inserts rather than three per case.
+
+        Each insert is a round trip, and against a remote cluster a round trip costs far more
+        than the rows in it: seven cases meant twenty-one of them, which was most of the time a
+        run spent after it had finished thinking. The rows are identical either way -- the
+        engines are MergeTree, so one insert of seven rows and seven of one row differ only in
+        the number of parts left for the background merge to tidy up.
+
+        Each table is inserted independently and a failure is reported rather than retried.
+        ``cases`` would tolerate a retry -- it is a ReplacingMergeTree keyed on case_id -- but
+        ``case_candidates`` and ``case_steps`` are plain MergeTree, so re-sending rows that had
+        already landed would duplicate them, and a case whose trace is written twice is worse
+        than one that reports a write failure.
+        """
+        if not cases:
+            return
+
+        if link_recurrence:
+            try:
+                found = self.find_recurrences(cases)
+                for case in cases:
+                    if not case.recurrence_of and case.case_id in found:
+                        case.recurrence_of = found[case.case_id]
+            except Exception as exc:  # noqa: BLE001 - a missing back-link must not lose the cases
+                log.warning("Recurrence lookup failed for run %s: %s", cases[0].run_id, exc)
+
+        batches = (
+            ("cases", [c.case_row() for c in cases], CASE_COLUMNS, "insert_cases"),
+            (
+                "case_candidates",
+                [row for c in cases for row in c.candidate_rows()],
+                CANDIDATE_COLUMNS,
+                "insert_candidates",
+            ),
+            (
+                "case_steps",
+                [row for c in cases for row in c.step_rows()],
+                STEP_COLUMNS,
+                "insert_steps",
+            ),
+        )
+
+        failed: list[str] = []
+        for table, rows, columns, name in batches:
+            if not rows:
+                continue
+            try:
+                self.ch.insert(table, rows, columns, name=name)
+            except Exception as exc:  # noqa: BLE001
+                log.error("Failed to write %d row(s) to %s: %s", len(rows), table, exc)
+                failed.append(table)
+
+        if failed:
+            raise RuntimeError(f"case write failed for: {', '.join(failed)}")
 
     def write_coverage(self, run_id: str, gaps: list[CoverageGap], window: Window) -> int:
         """Record what could not be tested.

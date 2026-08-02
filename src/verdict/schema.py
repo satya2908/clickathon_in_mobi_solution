@@ -512,7 +512,10 @@ ORDER BY (case_id)""",
   trace_id    String,
   cases_found UInt32,
   status      LowCardinality(String),
-  note        String
+  note        String,
+  -- Measured, not derived. started_at and finished_at are second-resolution, which cannot
+  -- express a run that takes two seconds without rounding it to two or three.
+  duration_ms UInt32 DEFAULT 0
 )
 ENGINE = ReplacingMergeTree(started_at)
 ORDER BY (run_id)""",
@@ -542,6 +545,11 @@ def migration_statements() -> list[Statement]:
         Statement(
             "migrate_steps_offset_ms",
             "ALTER TABLE case_steps ADD COLUMN IF NOT EXISTS offset_ms UInt32 DEFAULT 0 AFTER duration_ms",
+        ),
+        # Last in the DDL too, so appending it here keeps the positional insert aligned.
+        Statement(
+            "migrate_runs_duration_ms",
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS duration_ms UInt32 DEFAULT 0",
         ),
         *(
             Statement(f"migrate_cases_{name.split()[0]}", f"ALTER TABLE cases ADD COLUMN IF NOT EXISTS {name}")

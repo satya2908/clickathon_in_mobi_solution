@@ -36,6 +36,21 @@ class TestNaiveDatetimesAreReadAsUTC:
         assert as_utc(None) is None
         assert as_utc({}) == {}
 
+    def test_datetimes_inside_an_array_parameter_are_stamped_too(self):
+        """An Array(DateTime) bound element by element must not smuggle local time through.
+
+        Left unstamped, a query filtering on such an array silently matches fewer rows than it
+        should and reports no error, which is how a batched recurrence lookup came back empty.
+        """
+        out = as_utc({"cutoffs": [datetime(2026, 6, 23), datetime(2026, 6, 24, 9, 15)]})
+        assert out["cutoffs"] == [
+            datetime(2026, 6, 23, tzinfo=UTC),
+            datetime(2026, 6, 24, 9, 15, tzinfo=UTC),
+        ]
+
+    def test_arrays_of_other_things_are_unharmed(self):
+        assert as_utc({"fps": ["a", "b"], "ks": [1, 2]}) == {"fps": ["a", "b"], "ks": [1, 2]}
+
 
 class TestRenderedSQLMatchesWhatRan:
     """The displayed query is a claim that running it reproduces the number beside it."""

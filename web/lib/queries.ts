@@ -50,11 +50,13 @@ interface RunRow {
   git_sha: string;
   trace_id: string;
   note: string;
+  duration_ms: number;
 }
 
 export async function getRuns(limit = 20): Promise<Run[]> {
   const raw = await rows<RunRow>(
-    `SELECT run_id, started_at, finished_at, status, cases_found, git_sha, trace_id, note
+    `SELECT run_id, started_at, finished_at, status, cases_found, git_sha, trace_id, note,
+            duration_ms
      FROM runs ORDER BY started_at DESC LIMIT {limit:UInt32}`,
     { limit },
   );
@@ -70,9 +72,11 @@ export async function getRuns(limit = 20): Promise<Run[]> {
       git_sha: r.git_sha ?? '',
       trace_id: r.trace_id ?? '',
       note: r.note ?? '',
-      // Not a stored column: the engine records two timestamps and the difference is the
-      // only honest reading of how long the run took.
-      duration_ms: Math.max(0, Date.parse(finished) - Date.parse(started)) || 0,
+      // The measured elapsed time when the run recorded one. Runs written before that column
+      // existed fall back to the timestamp difference, which is whole seconds and so reads 2s
+      // for anything between 1.5 and 2.5.
+      duration_ms:
+        num(r.duration_ms) || Math.max(0, Date.parse(finished) - Date.parse(started)) || 0,
     };
   });
 }

@@ -382,7 +382,18 @@ export function Console({ run, runs, cases, series, spans, empty }: Props) {
 
       <div className="status">
         <span>{run ? run.run_id.slice(0, 8) : 'no run'}</span>
-        <span>{kpi.cellsTested.toLocaleString()} cells</span>
+        {/* Beside the cell count deliberately: the two together are the claim, and either one
+            alone invites the wrong question. */}
+        <span title="Segment-and-metric combinations tested against a baseline in this run">
+          {kpi.cellsTested.toLocaleString()} cells
+        </span>
+        {run && run.duration_ms > 0 && (
+          <span title="Wall clock for the whole run: detection, localization and persistence">
+            {run.duration_ms < 1000
+              ? `${run.duration_ms} ms`
+              : `${(run.duration_ms / 1000).toFixed(1)}s`}
+          </span>
+        )}
         <span>{kpi.spans.toLocaleString()} spans</span>
         <span>{kpi.llmVerified} narratives verified</span>
         <span>

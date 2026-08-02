@@ -39,9 +39,9 @@ from .detect import (
     CoverageGap,
     DetectionResult,
     Finding,
-    lattice_combos,
     apply_correction,
     detect_temporal,
+    lattice_combos,
 )
 from .localize import Localization, Localizer
 from .metrics import MetricRegistry
@@ -516,11 +516,12 @@ def _persist(
     for case in result.cases:
         for step in case.steps:
             step["case_id"] = case.case_id
-        try:
-            store.write_case(case)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Failed to persist case %s: %s", case.case_id, exc)
-            ok = False
+
+    try:
+        store.write_cases(result.cases)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Failed to persist cases for run %s: %s", run_id, exc)
+        ok = False
 
     try:
         store.write_coverage(run_id, result.gaps, window)
@@ -529,6 +530,9 @@ def _persist(
         ok = False
 
     try:
+        # From the in-memory datetime, which keeps microseconds, rather than from the difference
+        # of the two stored timestamps, which are truncated to whole seconds.
+        elapsed_ms = max(0, round((datetime.now(UTC) - started).total_seconds() * 1000))
         store.close_run(
             run_id,
             cases_found=len(result.cases),
@@ -537,6 +541,7 @@ def _persist(
             config_json=cfg.redacted_json(),
             git_sha=git_sha(),
             started_at=started,
+            duration_ms=elapsed_ms,
         )
     except Exception as exc:  # noqa: BLE001
         log.error("Failed to close run %s: %s", run_id, exc)
