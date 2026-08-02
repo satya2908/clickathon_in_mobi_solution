@@ -71,6 +71,29 @@ _PHI_HALF_LIFE = 10.0
 # has already discounted for the number of chances noise had.
 _UNCORRECTED_CAP = 0.25
 
+#: Why this component was capped, keyed by how the finding was screened. Three different
+#: situations were previously reported with one sentence that was only true of the first.
+_WHY_CAPPED = {
+    "": (
+        "The finding did not survive the false-discovery correction over its family, so this "
+        "component is capped at {cap} whatever its nominal p-value."
+    ),
+    "benjamini_hochberg": (
+        "The finding did not survive the false-discovery correction over its family, so this "
+        "component is capped at {cap} whatever its nominal p-value."
+    ),
+    "structural_z": (
+        "Screened against a fixed structural threshold rather than through the false-discovery "
+        "correction, which runs over the temporal family only, so this component is capped at "
+        "{cap} whatever its nominal p-value."
+    ),
+    "post_hoc": (
+        "Re-tested after the localizer had already named this cell, so the p-value carries a "
+        "selection effect no correction here accounts for, and this component is capped at "
+        "{cap}. The localization gates, not this number, are the argument."
+    ),
+}
+
 # Models ``stats`` returns when no test was performed. They carry p = 1.0 and z = 0.0, which
 # would otherwise read as "tested and found unremarkable" rather than "never tested".
 _UNTESTED_MODELS = frozenset({"log_ratio_insufficient", "log_ratio_degenerate"})
@@ -246,10 +269,13 @@ def _significance(finding: Finding) -> _Reading:
             "per cell."
         )
     if not finding.survives_correction:
+        # Capped either way, but the reason differs and stating the wrong one is a false claim
+        # about how the finding was arrived at. Only a finding that actually entered the family
+        # and lost can be said to have failed the correction; the others were never offered to
+        # it, for reasons that are themselves part of the argument.
         value = min(value, _UNCORRECTED_CAP)
-        detail += (
-            " The finding did not survive the false-discovery correction over its family, so "
-            f"this component is capped at {_UNCORRECTED_CAP:.2f} whatever its nominal p-value."
+        detail += f" {_WHY_CAPPED.get(finding.screening, _WHY_CAPPED[''])}".format(
+            cap=f"{_UNCORRECTED_CAP:.2f}"
         )
     return _Reading(_clamp(value), detail)
 

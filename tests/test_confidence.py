@@ -83,6 +83,7 @@ def finding(
     weeks_kept: int = 3,
     weeks_seen: int = 4,
     model: str = "two_proportion",
+    screening: str = "benjamini_hochberg",
 ) -> Finding:
     return Finding(
         metric="fill_rate",
@@ -104,6 +105,7 @@ def finding(
         weeks_kept=weeks_kept,
         weeks_seen=weeks_seen,
         survives_correction=survives,
+        screening=screening,
     )
 
 
@@ -389,6 +391,38 @@ class TestSignificance:
         )
         assert rejected.score == 0.25
         assert "did not survive the false-discovery correction" in rejected.detail
+
+    def test_a_structural_finding_is_capped_without_claiming_it_failed_a_correction(self):
+        """Structural findings never enter the Benjamini-Hochberg family at all.
+
+        Saying they "did not survive" it describes a contest that never happened, which is the
+        same class of false statement as claiming they survived it -- and the latter is what
+        the default value used to produce.
+        """
+        got = component(
+            score(
+                case(),
+                finding(p_value=1e-30, survives=False, screening="structural_z"),
+                CFG,
+            ),
+            "significance",
+        )
+        assert got.score == 0.25
+        assert "fixed structural threshold" in got.detail
+        assert "did not survive" not in got.detail
+
+    def test_a_post_hoc_confirmation_names_the_selection_effect(self):
+        got = component(
+            score(
+                case(),
+                finding(p_value=1e-30, survives=False, screening="post_hoc"),
+                CFG,
+            ),
+            "significance",
+        )
+        assert got.score == 0.25
+        assert "selection effect" in got.detail
+        assert "did not survive" not in got.detail
 
     def test_a_test_that_never_ran_is_unknown_rather_than_insignificant(self):
         """log_ratio_test returns p = 1.0 and z = 0.0 when the segment's history was too short

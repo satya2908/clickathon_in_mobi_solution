@@ -47,6 +47,15 @@ CURRENCY = "currency"
 COUNT = "count"
 PLAIN = ""
 
+#: How a finding reached the published list. Spelled out rather than reported as a yes/no on
+#: "survived the correction", because the two detectors are screened by different procedures
+#: and a boolean forced the structural one to answer a question that was never asked of it.
+_SCREENING_LABEL = {
+    "benjamini_hochberg": "Benjamini-Hochberg over every cell tested in this run",
+    "structural_z": "fixed structural threshold, outside the correction family",
+    "post_hoc": "re-tested after the localizer named the cell, so outside the family",
+}
+
 # What a literal written with each suffix is allowed to resolve to. A bare literal may match
 # anything, because prose legitimately writes a proportion as "0.93"; a suffixed one may not,
 # because the suffix is an assertion about units that the claim can contradict.
@@ -908,9 +917,11 @@ def _finding_claims(
               finding.weeks_kept, COUNT,
               f"Out of {finding.weeks_seen} aligned weeks available; the rest were dropped as "
               "unusable or trimmed as extreme."),
-        Claim("finding.survives_correction", "survived the false-discovery correction",
-              "yes" if finding.survives_correction else "no", PLAIN,
-              "Benjamini-Hochberg over every cell tested in this run, not per combo."),
+        Claim("finding.screening", "how this finding was screened",
+              _SCREENING_LABEL.get(finding.screening, "not screened"), PLAIN,
+              "Benjamini-Hochberg runs over the temporal family only. A structural residual "
+              "is screened against a fixed threshold instead, because pooling the two would "
+              "mix a weekly-baseline null with a median-polish null."),
     ]
     if finding.resolvable_effect is not None:
         out.append(

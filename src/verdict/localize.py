@@ -779,6 +779,7 @@ class Localizer:
             # the selection. The localization gates, not this p-value, are what argue the cell
             # was picked for cause.
             survives_correction=False,
+            screening="post_hoc",
             effect_threshold=metric.effect_threshold(self.detection.min_relative_effect),
             notes={"selected_post_hoc": True},
         )

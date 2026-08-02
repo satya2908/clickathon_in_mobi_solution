@@ -321,6 +321,11 @@ def _scan_pair(
                 baseline_counters=Counters(),
                 phi=1.0,
                 effect_threshold=effect_floor,
+                # Screened by a fixed z threshold, not by Benjamini-Hochberg. These findings
+                # never enter the temporal family -- pooling a median-polish residual with a
+                # weekly-baseline p-value would mix two different nulls -- so they must not
+                # claim a correction they did not go through.
+                screening="structural_z",
                 notes={
                     "combo": combo,
                     "residual_log": residual,

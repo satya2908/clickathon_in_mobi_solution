@@ -68,7 +68,14 @@ class Finding:
     phi: float
     weeks_kept: int = 0
     weeks_seen: int = 0
-    survives_correction: bool = True
+    # False until a correction has actually been applied. It used to default to True, which
+    # meant a finding claimed to have survived a procedure it had never been through: only the
+    # temporal family goes through Benjamini-Hochberg, so every structural finding carried the
+    # default into the case file and the narrative said it had survived a correction that never
+    # ran on it. `screening` records what did happen, so the two cannot drift apart again.
+    survives_correction: bool = False
+    #: How this finding was screened: "benjamini_hochberg", "structural_z", or "" if neither.
+    screening: str = ""
     # The metric's own reportable-effect threshold, carried on the finding so that the
     # correction step can filter a pooled family spanning several metrics without having to
     # look each one up again.
@@ -307,6 +314,7 @@ def apply_correction(result: DetectionResult, cfg: DetectionConfig) -> Detection
     )
     for finding, survives in zip(result.findings, keep, strict=True):
         finding.survives_correction = survives
+        finding.screening = "benjamini_hochberg"
 
     result.findings = [
         f
