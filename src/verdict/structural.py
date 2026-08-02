@@ -44,7 +44,14 @@ from .detect import CoverageGap, DetectionResult, Finding
 from .metrics import Metric, MetricRegistry
 from .query import Counters, RollupReader, Segment, Window
 from .schema import LATTICE_DEPTH
-from .stats import TestResult, mad, median, normal_sf, required_denominator
+from .stats import (
+    NEAR_TOTAL_COLLAPSE,
+    TestResult,
+    mad,
+    median,
+    normal_sf,
+    required_denominator,
+)
 from .trace import Tracer
 
 log = logging.getLogger(__name__)
@@ -355,6 +362,18 @@ def _cell_floor(metric: Metric, cells: dict[Segment, Counters], cfg: DetectionCo
     141 false positives on CTR while producing none on eCPM over identical clean windows: the
     threshold was adequate for a metric near 0.79 and roughly 150 times too lax for one near
     0.02.
+
+    Sized against a near-total collapse rather than against ``min_relative_effect``, for the
+    reasons ``detect._denominator_floor`` sets out at length and which apply identically here:
+    a floor built from the smallest effect anyone hopes to see is only as good as a threshold
+    chosen in advance, and choosing it well means fitting it to the corpus in hand.
+
+    On this corpus the difference decided whether the metric existed. At CTR's 1.09% base rate
+    a 5% floor demands roughly 827,000 impressions; a whole day has 184,000 across every cell
+    combined, so every structural CTR cell was filed as below_detection_floor and the detector
+    that exists to find interaction-only incidents never tested one. Against a 95% collapse the
+    same cells need about 1,300, and the false-discovery correction rather than a volume cutoff
+    is what keeps the noisy ones out of the published list.
     """
     if not metric.is_proportion:
         return 100.0
@@ -363,4 +382,4 @@ def _cell_floor(metric: Metric, cells: dict[Segment, Counters], cfg: DetectionCo
     den = sum(c.denominator(metric) or 0.0 for c in cells.values())
     if den <= 0:
         return float("inf")
-    return required_denominator(num / den, metric.effect_threshold(cfg.min_relative_effect))
+    return required_denominator(num / den, NEAR_TOTAL_COLLAPSE)

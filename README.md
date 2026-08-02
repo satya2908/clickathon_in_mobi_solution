@@ -168,20 +168,32 @@ evidence: `--no-llm` changes the wording and nothing else.
 **Publish.** Case, candidates (including every cleared one and why), per-step trace, and
 coverage gaps go to ClickHouse, and the trace also goes to HyperDX over OTLP.
 
-### What the corpus currently produces
+### What one run produces
 
-From 9M events, an eight-run history: 58 cases, 2,373 candidates evaluated, 3,277 recorded
-steps, 26,913 coverage-ledger rows.
+A single 24-hour run over 2026-07-05, all ten metrics, on the 9M-event corpus:
 
-The candidate outcomes are the interesting part, because they are mostly refusals — 1,434
-rejected as too narrow, 370 as too broad, 335 moving the wrong way, 28 that did not reproduce
-across the holdout, 19 immaterial. Fourteen survived everything and were accused. A detector
-that accepted its first plausible answer would have reported any of the other 2,359.
+| | |
+|---|---|
+| Cells tested | 14,683 across 10 metrics |
+| Findings surviving Benjamini-Hochberg | 159 |
+| Cases opened | 7 — one localized, six unlocalized |
+| Candidates evaluated | 287 |
+| Coverage gaps recorded | 3,421 |
 
-Forty-four cases are published as *unlocalized*: something moved, nothing survived the
-counterfactuals, and saying so is the honest result. Of the narratives, 21 are model-written
-and numerically verified; the rest fell back to the template, mostly against free-tier quota
-limits, which is exactly the degradation the fallback exists for.
+The candidate outcomes are the interesting part, because they are overwhelmingly refusals: 174
+rejected as too narrow, 45 as too broad, 42 moving the wrong way, 20 partial, 4 that did not
+reproduce across the holdout, 1 immaterial. **One** survived every counterfactual and was
+accused. A detector that accepted its first plausible answer would have reported any of the
+other 286.
+
+Six of the seven cases are published as *unlocalized*: something moved, nothing survived the
+counterfactuals, and saying so is the honest result rather than naming the least-implausible
+segment.
+
+The coverage ledger is larger than the case list by three orders of magnitude, and that ratio
+is the point — 2,638 cells were below the floor at which their own denominator could resolve a
+5% change, 747 had a non-positive value that log-space cannot represent, and 36 had no sampling
+model. See [Where this is weak](#where-this-is-weak) for what that floor means in practice.
 
 ---
 
@@ -350,7 +362,7 @@ window-versus-window comparison can see, and a **clean** window with nothing pla
 all. That last one is the one that matters most: a detector is only as good as its willingness
 to return nothing, and the clean case is the only test that can catch an invented incident.
 
-The suite is 460 tests over the statistics, the counterfactuals, the confidence scoring, the
+The suite is 462 tests over the statistics, the counterfactuals, the confidence scoring, the
 schema, and the narration guard, and it runs in about four seconds without touching the
 network.
 
