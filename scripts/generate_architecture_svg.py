@@ -461,7 +461,7 @@ class SVG:
 # --------------------------------------------------------------------------------------------
 
 BAND_TOP, BAND_BOTTOM = 116, 636
-TELEMETRY_TOP, TELEMETRY_BOTTOM = 660, 816
+TELEMETRY_TOP, TELEMETRY_BOTTOM = 660, 832
 
 COLUMNS = {
     "ingest": Rect(40, BAND_TOP, 196, BAND_BOTTOM - BAND_TOP),
@@ -649,25 +649,39 @@ def architecture() -> tuple[list[Boundary], list[Node]]:
             ("read-only SQL",),
             compact=True,
         ),
-        # Observability. The tracer fans left into the case, right into the collector, which is
-        # what "dual sink" means; the collector then fans into whichever backend is running.
-        Node("steps", "telemetry", Rect(60, 696, 280, 68), "case_steps", ("console waterfall",)),
+        # Observability. "Dual sink" is a property of the tracer, not the collector: every step is
+        # written to the case and emitted over OTLP. The two backends are mutually exclusive
+        # Compose profiles that bind the same OTLP ports, so this is a choice, not a fan-out.
+        Node("steps", "telemetry", Rect(60, 690, 240, 68), "case_steps", ("console waterfall",)),
         Node(
             "tracer",
             "telemetry",
-            Rect(400, 696, 360, 68),
+            Rect(340, 690, 280, 68),
             "Dual-sink tracer",
             ("every pipeline step",),
         ),
         Node(
-            "collector", "telemetry", Rect(820, 696, 260, 68), "OTLP collector", (":4317 · :4318",)
+            "collector", "telemetry", Rect(660, 690, 200, 68), "OTLP collector", (":4317 · :4318",)
         ),
-        Node("hyperdx", "telemetry", Rect(1140, 688, 400, 44), "Cloud otel_* + HyperDX"),
+        Node(
+            "trace-store",
+            "telemetry",
+            Rect(900, 690, 260, 68),
+            "ClickHouse Cloud",
+            ("otel_* beside the ad data",),
+        ),
+        Node(
+            "viewer",
+            "telemetry",
+            Rect(1200, 690, 340, 68),
+            "HyperDX",
+            ("hosted · read-only view",),
+        ),
         Node(
             "clickstack",
             "telemetry",
-            Rect(1140, 748, 400, 44),
-            "Self-hosted ClickStack",
+            Rect(660, 774, 880, 44),
+            "Self-hosted ClickStack · replaces these three",
             status="optional",
         ),
     ]
@@ -731,14 +745,17 @@ def draw_connectors(svg: SVG) -> None:
     svg.wire([(1439, 434), (1439, 464)], color=ACC, dashed=True)
     svg.wire([(1344, 316), (1331, 316), (1331, 593), (1344, 593)])
 
-    # Every step is recorded twice: once in the case, once as telemetry.
-    svg.wire([(1018, 526), (1018, 648), (580, 648), (580, 696)], dashed=True)
-    svg.edge_label("every step", 800, 640)
+    # Every step is recorded twice: once in the case, once as an OTLP span.
+    svg.wire([(1018, 526), (1018, 648), (480, 648), (480, 690)], dashed=True)
+    svg.edge_label("every step", 760, 640)
 
-    svg.wire([(400, 730), (340, 730)])
-    svg.wire([(760, 730), (820, 730)])
-    svg.wire([(1080, 716), (1110, 716), (1110, 710), (1140, 710)])
-    svg.wire([(1080, 744), (1110, 744), (1110, 770), (1140, 770)], color=ACC, dashed=True)
+    svg.wire([(340, 724), (300, 724)])
+    svg.wire([(620, 716), (660, 716)])
+    svg.wire([(860, 724), (900, 724)])
+    svg.wire([(1160, 724), (1200, 724)])
+
+    # The alternative backend receives the same OTLP stream instead of the collector.
+    svg.wire([(620, 736), (640, 736), (640, 796), (660, 796)], color=ACC, dashed=True)
 
 
 def draw_footer(svg: SVG) -> None:

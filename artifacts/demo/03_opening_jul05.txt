@@ -1,0 +1,53 @@
+Investigating 2026-07-05 00:00 to 2026-07-06 00:00 at 1h grain
+10:36:17 INFO    verdict.baseline: Baseline audit on 2026-07-04 00:00 to 2026-07-05 00:00: 196 of 14,686 cells flagged (1.3%)
+10:36:18 INFO    verdict.baseline: Baseline audit on 2026-07-03 00:00 to 2026-07-04 00:00: 316 of 14,722 cells flagged (2.1%)
+10:36:18 INFO    verdict.baseline: Baseline audit on the window under test (2026-07-05 00:00 to 2026-07-06 00:00): 46 of 14,683 cells flagged (0.3%)
+10:36:22 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:24 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:26 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:29 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:31 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:34 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:36 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:36:38 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+
+run 2f850ad834894d929bfcd6d6aa6c2f49: 14,683 cells tested across 10 metrics, 160
+findings survived correction, 8 case(s), 1723 coverage gap(s)
+
+                                     Cases                                      
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┳━━━━━━━━┓
+┃ Metric   ┃ Verdict ┃ Segment  ┃ Observ… ┃ Expected ┃  Effect ┃ Conf ┃ Impact ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━╇━━━━━━━━┩
+│ ctr      │ locali… │ os_vers… │ 0.0179… │ 0.010389 │  +72.7% │ 0.30 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ vertica… │         │          │         │      │        │
+│ clicks   │ locali… │ campaig… │     137 │      102 │  +34.3% │ 0.29 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ region=… │         │          │         │      │        │
+│ impress… │ unloca… │ country… │  21,494 │  1,399.4 │ +1436.… │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ device_… │         │          │         │      │        │
+│          │         │ A54      │         │          │         │      │        │
+│ fills    │ unloca… │ country… │  21,888 │  1,448.9 │ +1410.… │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ device_… │         │          │         │      │        │
+│          │         │ A54      │         │          │         │      │        │
+│ requests │ unloca… │ country… │  27,956 │  1,904.4 │ +1368.… │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ device_… │         │          │         │      │        │
+│          │         │ A54      │         │          │         │      │        │
+│ clicks   │ unloca… │ categor… │      60 │      173 │  -65.3% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ impress… │ unloca… │ campaig… │   1,534 │    6,861 │  -77.6% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ vertica… │         │          │         │      │        │
+│ fills    │ unloca… │ campaig… │   1,559 │  6,979.8 │  -77.7% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ vertica… │         │          │         │      │        │
+└──────────┴─────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+* revenue reached through a chain of estimates; see impact_json for the basis.
+Coverage: 1,723 cell(s) could not be tested (940 below_detection_floor, 36 
+no_sampling_model, 747 non_positive_value)
+
+Persisted as run 2f850ad834894d929bfcd6d6aa6c2f49
