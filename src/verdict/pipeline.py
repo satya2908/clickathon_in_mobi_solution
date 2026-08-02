@@ -150,12 +150,19 @@ def _finding_for_accused(
     Localization is what decides the answer, so once it has, the case should quote the accused's
     own test. Preferring a temporal finding matters because only that detector measures a segment
     against its own history, which is what the narration describes.
+
+    The metric has to match as well as the segment. ``everything`` spans the whole sweep, so a
+    segment that moved in two metrics has a finding in each, and matching on segment alone let a
+    fill_rate localization quote the requests finding for the same cell -- producing a case
+    labelled ``requests`` whose observed value was 0.599, because the numbers come from the
+    localization and only the name came from the finding. A different metric's test is not
+    evidence about this claim, so it is never a candidate.
     """
     accused = localization.accused
     if accused is None:
         return None
     for pool in (group, everything):
-        matches = [f for f in pool if f.segment == accused.segment]
+        matches = [f for f in pool if f.segment == accused.segment and f.metric == localization.metric]
         if matches:
             matches.sort(key=lambda f: (f.detector != "temporal", f.test.p_value))
             return matches[0]

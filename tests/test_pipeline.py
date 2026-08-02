@@ -1,8 +1,14 @@
 """What a case carries with it, and what it leaves behind."""
 
 from __future__ import annotations
-    
-from verdict.pipeline import for_metric
+
+from datetime import datetime
+
+from verdict.detect import Finding
+from verdict.localize import Candidate, Localization
+from verdict.pipeline import _finding_for_accused, for_metric
+from verdict.query import Counters, Segment, Window
+from verdict.stats import TestResult
 from verdict.trace import Step
 
 
@@ -47,3 +53,84 @@ class TestACaseCarriesItsOwnMetricsSweep:
             "detect",
             "correct",
         ]
+
+
+WINDOW = Window(datetime(2026, 7, 8), datetime(2026, 7, 9), "1h")
+SEGMENT = Segment.of(country="US", region="NAM")
+
+
+def _finding(metric: str, *, observed: float, expected: float, p_value: float = 1e-9) -> Finding:
+    return Finding(
+        metric=metric,
+        segment=SEGMENT,
+        window=WINDOW,
+        detector="temporal",
+        test=TestResult(
+            z=-9.4,
+            p_value=p_value,
+            observed=observed,
+            expected=expected,
+            absolute_effect=observed - expected,
+            relative_effect=(observed - expected) / expected,
+            model="two_proportion",
+        ),
+        observed_counters=Counters(requests=37_045, fills=22_190),
+        baseline_counters=Counters(requests=13_650, fills=10_700),
+        phi=1.0,
+        weeks_kept=3,
+        weeks_seen=4,
+    )
+
+
+class TestACaseQuotesATestOfItsOwnMetric:
+    """The case's name comes from the finding and its numbers come from the localization, so a
+    finding for the wrong metric produces a case that contradicts itself.
+
+    `everything` spans the whole sweep. A segment that moved in two metrics has a finding in
+    each, and matching on segment alone let a fill_rate localization on country=US AND region=NAM
+    quote the *requests* finding for that same cell. The case went to ClickHouse as
+    `metric=requests, observed=0.599` -- a request count of 0.6, which is the kind of number the
+    whole system exists to not produce.
+    """
+
+    def _localization(self) -> Localization:
+        accused = Candidate(
+            segment=SEGMENT,
+            observed=Counters(requests=37_045, fills=22_190),
+            expected=Counters(requests=13_650, fills=10_700),
+            observed_value=0.59902,
+            expected_value=0.78398,
+            status="accused",
+        )
+        return Localization(
+            metric="fill_rate",
+            window=WINDOW,
+            parent=Segment.total(),
+            parent_observed=0.7314,
+            parent_expected=0.7846,
+            parent_deviation=-0.0532,
+            accused=accused,
+            candidates=[accused],
+            mode="explain_away",
+        )
+
+    def test_another_metrics_finding_for_the_same_cell_is_not_quoted(self):
+        """Nothing for fill_rate in the sweep, so the wrong-metric finding must not stand in for
+        one. The localizer's own re-test of the accused cell is the fallback, and here there is
+        none, so the honest answer is that no finding describes this claim."""
+        loc = self._localization()
+        requests = _finding("requests", observed=37_045, expected=13_650, p_value=1e-12)
+        assert _finding_for_accused(loc, [], [requests]) is None
+
+    def test_its_own_metrics_finding_is_quoted_when_the_sweep_tested_it(self):
+        loc = self._localization()
+        requests = _finding("requests", observed=37_045, expected=13_650, p_value=1e-12)
+        fill_rate = _finding("fill_rate", observed=0.59902, expected=0.78398)
+        chosen = _finding_for_accused(loc, [], [requests, fill_rate])
+        assert chosen is fill_rate
+
+    def test_the_group_is_still_preferred_over_the_wider_sweep(self):
+        loc = self._localization()
+        in_group = _finding("fill_rate", observed=0.59902, expected=0.78398, p_value=1e-4)
+        elsewhere = _finding("fill_rate", observed=0.59902, expected=0.78398, p_value=1e-30)
+        assert _finding_for_accused(loc, [in_group], [elsewhere]) is in_group
