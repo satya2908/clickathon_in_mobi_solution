@@ -679,6 +679,60 @@ produced them has been removed, so edits go through whichever tool you prefer.
 
 Both files are kept byte-identical with the copies in the submission folder.
 
+### Screenshots
+
+Stills in [`artifacts/screenshots/`](artifacts/screenshots), for reading without playing
+the video.
+
+**[The board](artifacts/screenshots/01-board.png).** One run, ranked by priority. The
+header carries the four numbers a reader needs before drilling in: how many cases are
+open, how much revenue is at risk, the mean confidence, and how many cells the sweep
+could not test. The last one is the honest column — a system that only reports what it
+found tells you nothing about what it missed.
+
+![The board](artifacts/screenshots/01-board.png)
+
+**[A verdict and its trace](artifacts/screenshots/02-verdict-trace.png).** The
+`os_version=iOS 17.5` fill-rate collapse from the unseen release, opened. Every node in
+the trace says what it did, why it did it, and what came back — the localizer's `WHY`
+reads "the detector says a metric moved; it does not say where", which is the whole
+argument for the step existing. Note `audit` running before `detect`: that is the
+baseline check, and on this release it is what forced the fall back to sibling
+comparison.
+
+![A verdict and its trace](artifacts/screenshots/02-verdict-trace.png)
+
+**[The narrative](artifacts/screenshots/03-narrative.png).** Prose, with every number in
+it carried from the computation rather than generated. The components at the bottom are
+the confidence score's arithmetic, shown so the score can be argued with.
+
+![The narrative](artifacts/screenshots/03-narrative.png)
+
+**[The evidence ledger](artifacts/screenshots/04-evidence.png).** Every candidate the
+localizer considered, including the ones it cleared and the reason each was cleared.
+This is the part that is hard to fake and easy to check: if the accused segment is
+wrong, the exoneration reason for the right one is sitting in this table.
+
+![The evidence ledger](artifacts/screenshots/04-evidence.png)
+
+**[Verdict.AI over MCP](artifacts/screenshots/05-verdict-ai-mcp.png).** A follow-up
+question answered by querying ClickHouse through the official MCP server, with the
+query and its result shown rather than summarised.
+
+![Verdict.AI over MCP](artifacts/screenshots/05-verdict-ai-mcp.png)
+
+**[Recommendations](artifacts/screenshots/06-recommendations.png).** Off by default, and
+the only part of the console where a model proposes rather than reports. Each
+recommendation is checked against the case's own numbers in a second pass before it is
+shown; the second and third here are refusals to act, which is usually the more useful
+output.
+
+![Recommendations](artifacts/screenshots/06-recommendations.png)
+
+There is no HyperDX still here. It is a hosted service behind a ClickHouse Cloud login,
+so the trace view is best seen by following the HyperDX link in the case header against
+your own instance.
+
 ---
 
 ## Licence
