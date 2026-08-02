@@ -30,7 +30,7 @@ import json
 import logging
 import subprocess
 import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -49,6 +49,7 @@ from .localize import Localization, Localizer
 from .metrics import MetricRegistry
 from .query import RollupReader, Window
 from .store import Case, CaseStore, build_case, direction_of
+from .structloc import SiblingLocalizer
 from .structural import detect_structural
 from .trace import NullTracer, Step, Tracer
 
@@ -251,10 +252,22 @@ def group_findings(findings: list[Finding]) -> list[list[Finding]]:
 
     groups = []
     for group in buckets.values():
-        group.sort(key=lambda f: (f.test.p_value, -abs(f.test.relative_effect)))
+        group.sort(key=_strength)
         groups.append(group)
-    groups.sort(key=lambda g: (g[0].test.p_value, -abs(g[0].test.relative_effect)))
+    groups.sort(key=lambda g: _strength(g[0]))
     return groups
+
+
+def _strength(finding: Finding) -> tuple[float, float, float]:
+    """Ordering key: strongest evidence first.
+
+    ``p_value`` alone is not enough. A median-polish residual eight standard errors out
+    underflows to exactly 0.0, and so does one at thirty, so every structural finding in a run
+    ties at the head of the list and the group that gets investigated is whichever one happened
+    to sort first. Falling through to the standardised residual breaks that tie by how far out
+    the cell actually sits, which is the thing p was standing in for before it saturated.
+    """
+    return (finding.test.p_value, -abs(finding.test.z), -abs(finding.test.relative_effect))
 
 
 def for_metric(steps: list[Step], metric: str) -> list[Step]:
@@ -461,6 +474,7 @@ def _investigate(
     result.gaps = list(temporal.gaps) + list(struct.gaps)
 
     localizer = Localizer(reader, registry, cfg.localization, cfg.detection, tracer=tracer)
+    siblings = SiblingLocalizer(reader, registry, cfg.localization, cfg.detection, tracer=tracer)
     confidence_mod = _optional_confidence()
     narrate_mod = _optional_narrate() if narrate else None
 
@@ -487,7 +501,15 @@ def _investigate(
                 "each candidate in turn and asks whether the parent returns to expectation."
             )
             try:
-                localization = localizer.localize(entry, direction=direction)
+                # Every counterfactual the historical localizer applies -- sufficiency,
+                # minimality, maximality, holdout -- asks whether something returned to
+                # *expectation*, and expectation comes from the history this run has already
+                # rejected. Naming a segment on that basis would launder a baseline we do not
+                # believe into a verdict we would defend. So when the audit fails, the question
+                # is asked against siblings in the same window instead, which needs no history
+                # and so is untouched by the rejection.
+                chosen = localizer if use_temporal else siblings
+                localization = chosen.localize(entry, direction=direction)
             except Exception as exc:  # noqa: BLE001 - one failed localization must not end the run
                 # Logged at error, recorded on the result, and reported by the run's status.
                 # A warning was not enough: the only other trace of this is a case that never
@@ -496,16 +518,6 @@ def _investigate(
                 span.result(f"failed: {exc}")
                 result.failures.append(f"{entry.metric}: {exc}")
                 continue
-            if not use_temporal and localization.accused is not None:
-                # Every counterfactual the localizer applies -- sufficiency, minimality,
-                # maximality, holdout -- asks whether something returned to *expectation*, and
-                # expectation comes from the history this run has already rejected. Naming a
-                # segment on that basis would launder a baseline we do not believe into a
-                # verdict we would defend. The finding stands, because the structural detector
-                # reached it without history; the accusation does not.
-                localization = replace(
-                    localization, accused=None, mode="baseline_rejected"
-                )
             accused = localization.accused
             span.result(
                 f"accused {accused.segment.label()}" if accused else f"no candidate accused ({localization.mode})"

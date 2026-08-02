@@ -1,0 +1,62 @@
+Investigating 2026-07-08 00:00 to 2026-07-09 00:00 at 1h grain
+09:28:16 INFO    verdict.baseline: Baseline audit on 2026-07-07 00:00 to 2026-07-08 00:00: 6,198 of 14,736 cells flagged (42.1%)
+09:28:16 INFO    verdict.baseline: Baseline audit on 2026-07-06 00:00 to 2026-07-07 00:00: 6,250 of 14,748 cells flagged (42.4%)
+09:28:16 ERROR   verdict.pipeline: Baseline rejected: 42.1% of all tested cells are flagged on a recent window, against a bar of 10%. A baseline that disagrees with that much of the grid is not describing this population, so every temporal comparison drawn from it -- the expected values, the effect sizes and the significance -- would be measured against the wrong thing. Temporal detection is therefore switched off for this run and only the structural detector, which uses no history, is reported.
+09:28:17 INFO    verdict.pipeline: Prefetched 1,721 cells across 46 combos in one query
+
+run 073aaaa6e2e2493eb245eeba4af0881e: 0 cells tested across 10 metrics, 159 
+findings survived correction, 13 case(s), 1090 coverage gap(s), STRUCTURAL ONLY 
+(baseline rejected)
+
+Baseline rejected: 42.1% of all tested cells are flagged on a recent window, 
+against a bar of 10%. A baseline that disagrees with that much of the grid is 
+not describing this population, so every temporal comparison drawn from it -- 
+the expected values, the effect sizes and the significance -- would be measured 
+against the wrong thing. Temporal detection is therefore switched off for this 
+run and only the structural detector, which uses no history, is reported.
+
+                                     Cases                                      
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┳━━━━━━━━┓
+┃ Metric   ┃ Verdict ┃ Segment  ┃ Observ… ┃ Expected ┃  Effect ┃ Conf ┃ Impact ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━╇━━━━━━━━┩
+│ fill_ra… │ locali… │ os_vers… │ 0.47773 │  0.79118 │  -39.6% │ 0.67 │   -34* │
+│          │         │ 17.5     │         │          │         │      │        │
+│ rpr      │ locali… │ ad_form… │ 0.0013… │ 0.00179… │  -26.8% │ 0.54 │    -38 │
+│ rpr      │ locali… │ region=… │ 0.0027… │ 0.00105… │ +155.7% │ 0.50 │    128 │
+│ ecpm     │ locali… │ region=… │  3.6363 │   1.5958 │ +127.9% │ 0.49 │    118 │
+│ requests │ undeco… │ device_… │  41,770 │  7,586.9 │ +450.6% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ fills    │ undeco… │ device_… │  19,964 │  3,724.9 │ +436.0% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ impress… │ undeco… │ device_… │  19,546 │  3,655.3 │ +434.7% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ clicks   │ undeco… │ device_… │     229 │   31.762 │ +621.0% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ requests │ undeco… │ categor… │  29,879 │   65,430 │  -54.3% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ fill_ra… │ unloca… │ country… │ 0.79014 │  0.71996 │   +9.7% │ 0.00 │     2* │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ device_… │         │          │         │      │        │
+│          │         │ 13       │         │          │         │      │        │
+│ fills    │ undeco… │ categor… │  22,341 │   47,412 │  -52.9% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ impress… │ undeco… │ categor… │  21,871 │   46,107 │  -52.6% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ clicks   │ undeco… │ categor… │     250 │   476.97 │  -47.6% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+└──────────┴─────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+* revenue reached through a chain of estimates; see impact_json for the basis.
+Coverage: 1,090 cell(s) could not be tested (313 below_detection_floor, 36 
+no_sampling_model, 741 non_positive_value)

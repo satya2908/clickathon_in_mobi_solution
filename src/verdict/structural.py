@@ -228,7 +228,7 @@ def _scan_pair(
     if not cells:
         return result
 
-    floor = _cell_floor(metric, cells, cfg)
+    floor = cell_floor(metric, cells, cfg)
 
     grid: dict[tuple[str, str], float] = {}
     counters_by_cell: dict[tuple[str, str], Counters] = {}
@@ -360,7 +360,7 @@ def _scan_pair(
     return result
 
 
-def _cell_floor(metric: Metric, cells: dict[Segment, Counters], cfg: DetectionConfig) -> float:
+def cell_floor(metric: Metric, cells: dict[Segment, Counters], cfg: DetectionConfig) -> float:
     """Traffic a cell needs before its residual is worth reading.
 
     Sized from this metric's own overall rate. Applying one shared constant is what produced
