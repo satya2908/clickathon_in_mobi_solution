@@ -1,0 +1,76 @@
+Investigating 2026-07-07 00:00 to 2026-07-08 00:00 at 1h grain
+10:23:46 INFO    verdict.baseline: Baseline audit on 2026-07-06 00:00 to 2026-07-07 00:00: 6,250 of 14,748 cells flagged (42.4%)
+10:23:47 INFO    verdict.baseline: Baseline audit on 2026-07-05 00:00 to 2026-07-06 00:00: 35 of 14,689 cells flagged (0.2%)
+10:23:47 INFO    verdict.baseline: Baseline audit on the window under test (2026-07-07 00:00 to 2026-07-08 00:00): 6,198 of 14,736 cells flagged (42.1%)
+10:23:47 ERROR   verdict.pipeline: Baseline rejected at this window: 42.1% of the grid disagrees with history here against a bar of 10%, while recent windows sat at 0.2%. History was sound until this window and stops describing the population inside it. That is the shape of a corpus boundary -- dimension attributes reissued against the same identifiers, so a label names one group of entities before it and a different group after -- rather than of an incident, which moves a small part of the grid rather than most of it. Segment-level temporal detection is therefore switched off for this run. The platform aggregate is still compared against its own history, because relabelling which entities carry which attribute cannot move a total, and localization falls to the structural comparison against siblings in the same window, which consults no history at all.
+10:23:50 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:23:52 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:23:55 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:23:56 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:23:58 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:01 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:03 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:06 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:10 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:11 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:15 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+10:24:18 INFO    httpx: HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+
+run e02af081733f41c5924f6918d44d7b62: 10 cells tested across 10 metrics, 134 
+findings survived correction, 12 case(s), 1090 coverage gap(s), AGGREGATE-ONLY 
+HISTORY (segment baseline rejected)
+
+Baseline rejected at this window: 42.1% of the grid disagrees with history here 
+against a bar of 10%, while recent windows sat at 0.2%. History was sound until 
+this window and stops describing the population inside it. That is the shape of 
+a corpus boundary -- dimension attributes reissued against the same identifiers,
+so a label names one group of entities before it and a different group after -- 
+rather than of an incident, which moves a small part of the grid rather than 
+most of it. Segment-level temporal detection is therefore switched off for this 
+run. The platform aggregate is still compared against its own history, because 
+relabelling which entities carry which attribute cannot move a total, and 
+localization falls to the structural comparison against siblings in the same 
+window, which consults no history at all.
+
+                                     Cases                                      
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┳━━━━━━━━┓
+┃ Metric   ┃ Verdict ┃ Segment  ┃ Observ… ┃ Expected ┃  Effect ┃ Conf ┃ Impact ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━╇━━━━━━━━┩
+│ rpr      │ locali… │ ad_form… │ 0.0014… │ 0.00192… │  -26.4% │ 0.54 │    -40 │
+│ rpr      │ locali… │ region=… │ 0.0028… │ 0.00123… │ +128.8% │ 0.50 │    124 │
+│ ecpm     │ locali… │ ad_form… │  1.8039 │   2.5115 │  -28.2% │ 0.49 │    -44 │
+│ ecpm     │ locali… │ region=… │   3.627 │   1.5875 │ +128.5% │ 0.49 │    124 │
+│ impress… │ undeco… │ device_… │  32,283 │  6,022.5 │ +436.0% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ fills    │ undeco… │ device_… │  32,902 │  6,147.2 │ +435.2% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ requests │ undeco… │ device_… │  41,385 │  7,699.7 │ +437.5% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ clicks   │ undeco… │ country… │     308 │   20.238 │ +1421.… │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ requests │ undeco… │ categor… │  29,751 │   63,017 │  -52.8% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ fills    │ undeco… │ categor… │  24,257 │   51,026 │  -52.5% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ impress… │ undeco… │ categor… │  23,809 │   50,019 │  -52.4% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+│ clicks   │ undeco… │ categor… │     234 │   582.54 │  -59.8% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+└──────────┴─────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+* revenue reached through a chain of estimates; see impact_json for the basis.
+Coverage: 1,090 cell(s) could not be tested (307 below_detection_floor, 36 
+no_sampling_model, 747 non_positive_value)
+
+Persisted as run e02af081733f41c5924f6918d44d7b62
