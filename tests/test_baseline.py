@@ -79,13 +79,23 @@ class TestACalibratedBaselineIsAccepted:
         self, monkeypatch, cfg, registry, window
     ):
         _, calls = _audit_with(monkeypatch, [(1, 100), (1, 100)], cfg, registry, window)
-        assert [c.start for c in calls] == [datetime(2026, 7, 7), datetime(2026, 7, 6)]
+        assert [c.start for c in calls][:2] == [datetime(2026, 7, 7), datetime(2026, 7, 6)]
 
-    def test_the_window_under_test_is_never_used_to_audit_itself(
+    def test_the_window_under_test_is_read_too_but_kept_apart(
         self, monkeypatch, cfg, registry, window
     ):
-        _, calls = _audit_with(monkeypatch, [(1, 100), (1, 100)], cfg, registry, window)
-        assert window.start not in [c.start for c in calls]
+        """It is read last and scored separately.
+
+        Averaging it into the historical rate would be the worst of both: an incident inside the
+        window would drag the historical reading up and switch the detector off on the day it is
+        needed, which is the failure the minimum exists to prevent.
+        """
+        audit, calls = _audit_with(
+            monkeypatch, [(1, 100), (1, 100), (400, 1000)], cfg, registry, window
+        )
+        assert calls[-1].start == window.start
+        assert audit.flagged_rate == pytest.approx(0.01)
+        assert audit.target_rate == pytest.approx(0.40)
 
 
 class TestAnUnusableBaselineIsRejected:
@@ -125,6 +135,68 @@ class TestARealIncidentIsNotMistakenForMiscalibration:
         assert not audit.trustworthy
 
 
+class TestACorpusBoundaryIsCaughtOnTheDayItArrives:
+    """The case the historical reading structurally cannot see.
+
+    A corpus that reissues its dimension tables between one day and the next leaves every prior
+    window clean -- they are all on the old side of the seam and agree with each other -- while
+    every comparison across it is meaningless. Auditing only the past means staying silent for
+    as many days as the audit is wide, and those are the days whose verdicts are worth least.
+    """
+
+    def test_clean_history_and_a_wrecked_window_rejects(
+        self, monkeypatch, cfg, registry, window
+    ):
+        audit, _ = _audit_with(
+            monkeypatch, [(2, 1000), (2, 1000), (424, 1000)], cfg, registry, window
+        )
+        assert not audit.trustworthy
+        assert audit.reason == "boundary"
+
+    def test_it_reports_both_readings_so_the_shape_is_visible(
+        self, monkeypatch, cfg, registry, window
+    ):
+        audit, _ = _audit_with(
+            monkeypatch, [(2, 1000), (2, 1000), (424, 1000)], cfg, registry, window
+        )
+        assert "42.4%" in audit.headline
+        assert "0.2%" in audit.headline
+
+    def test_the_explanation_names_the_boundary_rather_than_a_dead_baseline(
+        self, monkeypatch, cfg, registry, window
+    ):
+        audit, _ = _audit_with(
+            monkeypatch, [(2, 1000), (2, 1000), (424, 1000)], cfg, registry, window
+        )
+        assert "boundary" in audit.detail.lower()
+
+    def test_it_says_the_aggregate_survives(self, monkeypatch, cfg, registry, window):
+        """Rejection is only safe because it is not blindness, so the explanation must say so."""
+        audit, _ = _audit_with(
+            monkeypatch, [(2, 1000), (2, 1000), (424, 1000)], cfg, registry, window
+        )
+        assert "aggregate" in audit.detail.lower()
+        assert "sibling" in audit.detail.lower()
+
+    def test_a_quiet_window_after_quiet_history_is_left_alone(
+        self, monkeypatch, cfg, registry, window
+    ):
+        audit, _ = _audit_with(
+            monkeypatch, [(2, 1000), (3, 1000), (9, 1000)], cfg, registry, window
+        )
+        assert audit.trustworthy
+        assert audit.reason == ""
+
+    def test_a_baseline_wrong_for_a_while_is_named_as_that_not_as_a_boundary(
+        self, monkeypatch, cfg, registry, window
+    ):
+        audit, _ = _audit_with(
+            monkeypatch, [(400, 1000), (410, 1000), (420, 1000)], cfg, registry, window
+        )
+        assert not audit.trustworthy
+        assert audit.reason == "history"
+
+
 class TestAnAuditThatCouldNotRun:
     def test_no_history_reports_that_it_did_not_check_rather_than_that_it_passed(
         self, monkeypatch, cfg, registry, window
@@ -158,9 +230,11 @@ class TestTheBarIsConfigurable:
         self, monkeypatch, cfg, registry, window
     ):
         _, calls = _audit_with(
-            monkeypatch, [(1, 100)] * 4, cfg, registry, window, baseline_audit_windows=4
+            monkeypatch, [(1, 100)] * 5, cfg, registry, window, baseline_audit_windows=4
         )
-        assert len(calls) == 4
+        # Four historical windows, then the window under test.
+        assert len(calls) == 5
+        assert calls[-1].start == window.start
 
 
 class TestTheAuditIsReportable:

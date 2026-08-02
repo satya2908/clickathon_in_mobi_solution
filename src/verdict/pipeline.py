@@ -48,6 +48,7 @@ from .detect import (
 from .localize import Localization, Localizer
 from .metrics import MetricRegistry
 from .query import RollupReader, Window
+from .schema import TOTAL_COMBO
 from .store import Case, CaseStore, build_case, direction_of
 from .structloc import SiblingLocalizer
 from .structural import detect_structural
@@ -140,7 +141,7 @@ class InvestigationResult:
             f"survived correction, {len(self.cases)} case(s), {len(self.gaps)} coverage gap(s)"
         )
         if self.temporal_disabled:
-            out += ", STRUCTURAL ONLY (baseline rejected)"
+            out += ", AGGREGATE-ONLY HISTORY (segment baseline rejected)"
         if self.failures:
             out += f", {len(self.failures)} localization(s) FAILED"
         return out
@@ -300,6 +301,7 @@ def detect_all(
     tracer: Tracer | None = None,
     structural: bool = True,
     temporal_enabled: bool = True,
+    temporal_combos: list[str] | None = None,
 ) -> tuple[DetectionResult, DetectionResult]:
     """Run both detectors over every requested metric, returning them unmixed.
 
@@ -307,8 +309,13 @@ def detect_all(
     docstring. Callers that want a single list should correct the temporal result first and then
     concatenate, which is what ``investigate`` does.
 
-    ``temporal_enabled`` is switched off when the baseline audit finds that history no longer
-    describes the population; the structural detector needs none and carries the run alone.
+    ``temporal_enabled`` switches history off entirely. ``temporal_combos`` narrows what it is
+    allowed to compare instead, and the audit uses it to keep the platform aggregate when it has
+    rejected segment-level history: reissuing which entities carry which attribute rearranges
+    every segment and cannot move a total, so the total's own history stays comparable when
+    nothing below it does. Dropping it along with the rest would leave a platform-wide movement
+    with no detector able to see it, since the structural comparison is between siblings and a
+    total has none.
     """
     names = metrics or list(registry.metrics)
     temporal = DetectionResult()
@@ -329,7 +336,10 @@ def detect_all(
 
     for name in names:
         if temporal_enabled:
-            result = detect_temporal(reader, registry, cfg.detection, name, window, tracer=tracer, correct=False)
+            result = detect_temporal(
+                reader, registry, cfg.detection, name, window,
+                combos=temporal_combos, tracer=tracer, correct=False,
+            )
             # extend() rather than extending the lists by hand, because it also carries
             # tested_cells. Benjamini-Hochberg sizes its family from that count, and copying
             # only the findings across left it at zero -- so the family collapsed to the number
@@ -443,12 +453,15 @@ def _investigate(
             "Every cell in the lattice is compared against its own history and against its "
             "siblings, because an incident confined to one cell is invisible in the total."
             if use_temporal
-            else "History failed its audit, so only the structural comparison against siblings "
-            "in the same bucket is used. It needs no baseline and is unaffected."
+            else "Segment-level history failed its audit, so segments are compared only against "
+            "their siblings in the same window, which needs no baseline. The platform aggregate "
+            "keeps its own history: relabelling entities rearranges segments and cannot move a "
+            "total, and a total has no siblings to be compared against instead."
         )
         temporal, struct = detect_all(
             reader, registry, cfg, window, metrics=metrics, tracer=tracer,
-            structural=True, temporal_enabled=use_temporal,
+            structural=True,
+            temporal_combos=None if use_temporal else [TOTAL_COMBO],
         )
         result.cells_tested = len(temporal.findings)
         span.result(
