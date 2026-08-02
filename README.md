@@ -401,8 +401,9 @@ confidence component gives the right reason for capping each.
 
 - **No trend model.** The baseline is a trailing seasonal level, so a persistent drift is
   partly absorbed into the thing it would have to be measured against. Global requests rose
-  8.55% across four weekly steps here while sitting only 5.25% above their trailing baseline.
-  `anchor_drift_enabled` and `anchor_lag_days` appear in the config and are read by no code.
+  8.55% across four weekly steps here while sitting only 5.25% above their trailing baseline. A
+  fixed-anchor drift guard was specified and never built; the settings for it have been removed
+  rather than left in the config implying a capability that does not exist.
 - **Mix shift is not separated from rate change.** An aggregate ratio can move because a
   segment's own rate degraded or because traffic shifted toward a segment that was always
   worse. These need different responses, and the candidate score measures only the first.

@@ -209,8 +209,6 @@ class DetectionConfig(BaseModel):
     structural_min_levels: int = 3
     structural_z_threshold: float = 5.0
     structural_min_window_days: int = 1
-    anchor_drift_enabled: bool = True
-    anchor_lag_days: int = 28
 
 
 class LocalizationConfig(BaseModel):

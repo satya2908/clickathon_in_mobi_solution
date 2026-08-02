@@ -74,9 +74,6 @@ detection:
   structural_min_levels: 3
   structural_z_threshold: 5.0
   structural_min_window_days: 1
-  # A trailing baseline chases slow drift and absorbs it. A fixed anchor does not.
-  anchor_drift_enabled: true
-  anchor_lag_days: 28
 
 localization:
   max_candidates: 40
