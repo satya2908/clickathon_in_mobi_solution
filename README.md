@@ -372,6 +372,62 @@ pytest -q
 
 ---
 
+## Where this is weak
+
+An independent statistical audit was run against this corpus. Its findings are recorded here
+rather than in a drawer, because a system that publishes a coverage ledger and then hides its
+own limitations is arguing against itself. What follows is what was verified, what was fixed,
+and what remains true.
+
+### Fixed as a result
+
+**The structural detector was silently disabled on low-rate metrics.** It sized its floor from
+`min_relative_effect`, while the temporal detector sizes its floor against a near-total
+collapse and argues at length why a threshold picked in advance is the wrong basis. At CTR's
+1.09% base rate the old floor demanded ~827,000 impressions; a whole day of this corpus has
+184,000 across every cell combined. Every structural CTR cell was therefore filed as
+`below_detection_floor` — 44,713 ledger rows, and one CTR case in twenty-three runs. The two
+detectors now agree, which halves the coverage ledger over a 24-hour window (3,421 gaps to
+1,723) and changes the case count by one.
+
+**Findings claimed a correction they had never been through.** `survives_correction` defaulted
+to `True`, and only the temporal family goes through Benjamini-Hochberg, so every structural
+finding reported that it had survived a procedure that was never run on it. Findings now carry
+a `screening` field naming what actually happened — Benjamini-Hochberg, a fixed structural
+threshold, or a post-hoc re-test of a cell the localizer had already chosen — and the
+confidence component gives the right reason for capping each.
+
+### Known and unfixed
+
+- **No trend model.** The baseline is a trailing seasonal level, so a persistent drift is
+  partly absorbed into the thing it would have to be measured against. Global requests rose
+  8.55% across four weekly steps here while sitting only 5.25% above their trailing baseline.
+  `anchor_drift_enabled` and `anchor_lag_days` appear in the config and are read by no code.
+- **Mix shift is not separated from rate change.** An aggregate ratio can move because a
+  segment's own rate degraded or because traffic shifted toward a segment that was always
+  worse. These need different responses, and the candidate score measures only the first.
+- **Sparse count tests are a normal approximation to a quasi-Poisson model** and are
+  overconfident in the tail where expected counts are small. Counts also dominate the case
+  list, 148 of 153 cases across all runs to date.
+- **Continuous-ratio inference is heuristic.** eCPM, RPR and revenue use a median/MAD statistic
+  against a Student-t tail, which is not the distribution that statistic follows. The rollups
+  store no second moments, so a properly calibrated interval is not currently constructible.
+- **Confirmed incidents are not masked out of future baselines.** At most one historical week
+  is trimmed, so two contaminated weeks in the same aligned history survive it.
+- **No iterative peeling.** Each group is localized once, so a dominant cause can mask a
+  smaller concurrent one.
+- **The holdout is not a true holdout.** Candidates are selected over the whole window and then
+  checked on both halves, so the second half participated in selection.
+- **High-cardinality dimensions are outside the lattice.** `app_id`, `advertiser_id` and
+  `geo_device_id` have no rollup cell at any grain, and the largest single app carries 12% of
+  requests. `verdict inject` plants an incident there specifically as an expected miss.
+
+The honest summary is that counterfactual removal here is accounting attribution, not causal
+identification. "This segment accounts for the movement" is supportable from what is computed;
+"this segment caused it" requires a mechanism the data does not contain.
+
+---
+
 ## Layout
 
 ```
