@@ -35,7 +35,14 @@ from typing import Any
 
 from .config import Config
 from .db import ClickHouse
-from .detect import CoverageGap, DetectionResult, Finding, apply_correction, detect_temporal
+from .detect import (
+    CoverageGap,
+    DetectionResult,
+    Finding,
+    lattice_combos,
+    apply_correction,
+    detect_temporal,
+)
 from .localize import Localization, Localizer
 from .metrics import MetricRegistry
 from .query import RollupReader, Window
@@ -249,6 +256,19 @@ def detect_all(
     temporal = DetectionResult()
     struct = DetectionResult()
 
+    # One read for the whole sweep. Each metric legally sees a different set of combinations,
+    # but the counters behind them are the same five columns, so the union is fetched once and
+    # every metric is scanned against it. Under per_combo this returns 0 and the detectors
+    # fall through to querying combination by combination.
+    wanted: list[str] = []
+    for name in names:
+        wanted.extend(lattice_combos(registry, registry.metric(name), window.grain))
+    cells = reader.prefetch_lattice(wanted, window, cfg.detection.baseline_weeks)
+    if cells:
+        log.info(
+            "Prefetched %s cells across %s combos in one query", f"{cells:,}", len(set(wanted))
+        )
+
     for name in names:
         result = detect_temporal(reader, registry, cfg.detection, name, window, tracer=tracer, correct=False)
         temporal.findings.extend(result.findings)
@@ -325,7 +345,7 @@ def _investigate(
     tracer = tracer or NullTracer()
     run_id = tracer.run_id or uuid.uuid4().hex
     started = datetime.now(UTC)
-    reader = RollupReader(ch)
+    reader = RollupReader(ch, read_mode=cfg.clickhouse.read_mode)
     store = CaseStore(ch)
     result = InvestigationResult(run_id=run_id, window=window)
     result.metrics_scanned = metrics or list(registry.metrics)

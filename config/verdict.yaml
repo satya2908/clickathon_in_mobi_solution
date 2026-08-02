@@ -19,6 +19,12 @@ clickhouse:
   verify: ${CLICKHOUSE_VERIFY:-true}
   connect_timeout: ${CLICKHOUSE_CONNECT_TIMEOUT:-30}
   send_receive_timeout: ${CLICKHOUSE_QUERY_TIMEOUT:-300}
+  # batch     one query for the whole lattice, scan answered from memory
+  # per_combo one query per combination, the shape this started as
+  # Same rows and same verdicts either way. The lattice sweep is thousands of small reads
+  # against a service several network hops away, so the choice is almost entirely a choice
+  # about how much of the run is spent waiting. Set to per_combo to measure the difference.
+  read_mode: ${CLICKHOUSE_READ_MODE:-batch}
   settings:
     # Scans are wide and shallow; let ClickHouse use the whole service for a single query
     # rather than serialising the lattice sweep behind a conservative default.

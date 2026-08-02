@@ -12,7 +12,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -137,6 +137,11 @@ class ClickHouseConfig(BaseModel):
     verify: bool = True
     connect_timeout: int = 30
     send_receive_timeout: int = 300
+    # How the lattice is read. "batch" fetches it in one query and answers the scan from
+    # memory; "per_combo" issues a query per combination. Identical results either way -- the
+    # difference is how many round trips the run spends, which on a remote service is most of
+    # its wall time. See RollupReader for the full argument.
+    read_mode: Literal["batch", "per_combo"] = "batch"
     settings: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

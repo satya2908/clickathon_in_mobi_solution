@@ -22,7 +22,7 @@ from verdict.detect import (
     DetectionResult,
     Finding,
     _denominator_floor,
-    _lattice_combos,
+    lattice_combos,
     apply_correction,
     estimate_dispersion,
 )
@@ -363,16 +363,16 @@ class TestLatticeMatchesGrain:
     @pytest.mark.parametrize("grain", sorted(LATTICE_DEPTH))
     def test_never_asks_a_grain_for_depth_it_does_not_store(self, grain):
         metric = REGISTRY.metric("fill_rate")
-        for combo in _lattice_combos(REGISTRY, metric, grain):
+        for combo in lattice_combos(REGISTRY, metric, grain):
             if combo != TOTAL_COMBO:
                 assert len(combo.split("|")) <= LATTICE_DEPTH[grain]
 
     def test_omits_dimensions_the_metric_cannot_legally_be_sliced_by(self):
         """campaign_type only exists on filled rows, so slicing fill rate by it silently
         redefines the denominator as "filled requests" and returns 1.0 everywhere."""
-        combos = _lattice_combos(REGISTRY, REGISTRY.metric("fill_rate"), "1h")
+        combos = lattice_combos(REGISTRY, REGISTRY.metric("fill_rate"), "1h")
         assert not any("campaign_type" in c or "vertical" in c for c in combos)
 
     def test_keeps_them_for_a_metric_whose_denominator_is_post_fill(self):
-        combos = _lattice_combos(REGISTRY, REGISTRY.metric("ctr"), "1h")
+        combos = lattice_combos(REGISTRY, REGISTRY.metric("ctr"), "1h")
         assert any("vertical" in c for c in combos)

@@ -274,7 +274,7 @@ def detect_temporal(
     metric = registry.metric(metric_name)
     result = DetectionResult()
 
-    targets = combos if combos is not None else _lattice_combos(registry, metric, window.grain)
+    targets = combos if combos is not None else lattice_combos(registry, metric, window.grain)
     for combo in targets:
         result.extend(
             _detect_temporal_combo(reader, registry, cfg, metric, window, combo, tracer)
@@ -317,7 +317,7 @@ def apply_correction(result: DetectionResult, cfg: DetectionConfig) -> Detection
     return result
 
 
-def _lattice_combos(registry: MetricRegistry, metric: Metric, grain: str = "1h") -> list[str]:
+def lattice_combos(registry: MetricRegistry, metric: Metric, grain: str = "1h") -> list[str]:
     """Combos this metric may legally be sliced by at this grain, total first.
 
     Two filters apply. Combos containing a dimension the metric cannot legally use are omitted

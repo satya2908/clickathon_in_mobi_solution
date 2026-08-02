@@ -12,6 +12,7 @@ This is also why nothing stores a metric. Fill rates cannot be subtracted from o
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -263,10 +264,33 @@ def _row_to_counters(row: tuple) -> Counters:
 
 
 class RollupReader:
-    """Every read of the rollup goes through here, so window semantics are defined once."""
+    """Every read of the rollup goes through here, so window semantics are defined once.
 
-    def __init__(self, ch: ClickHouse) -> None:
+    ``read_mode`` decides how the lattice is fetched, and on a remote service it is the single
+    largest term in how long a run takes.
+
+    ``per_combo`` issues one query per combination, which is the obvious shape and the wrong
+    one twice over. The counters it selects -- requests, fills, impressions, clicks, revenue --
+    do not depend on which metric is being scanned, so ten metrics over forty-six combinations
+    ask for the same forty-six results ten times. And each of those queries is around ten
+    milliseconds of ClickHouse behind a round trip several times longer, so the run spends most
+    of its life waiting rather than computing.
+
+    ``batch`` reads the whole lattice for the window and its baseline weeks in one query and
+    answers every later call from memory. Same rows, same arithmetic, same verdicts; the
+    difference is entirely in how many times the network is crossed to get them.
+
+    Both are kept because the comparison is worth being able to run, and because a single
+    result set is a memory cost that a much larger lattice might eventually not want to pay.
+    """
+
+    def __init__(self, ch: ClickHouse, *, read_mode: str = "batch") -> None:
         self.ch = ch
+        self.read_mode = read_mode
+        # (combo, window, weeks) -> cells. Populated by prefetch_lattice, read by
+        # slice_with_history and slice. Keyed by window because a holdout half and the full
+        # window are different questions that would otherwise collide.
+        self._lattice: dict[tuple[str, Window, int], dict[Segment, list[Counters]]] = {}
 
     def total(self, window: Window) -> Counters:
         rows = self.ch.query(
@@ -296,9 +320,98 @@ class RollupReader:
         )
         return _row_to_counters(rows[0]) if rows and rows[0][0] is not None else Counters()
 
+    def prefetch_lattice(self, combos: Sequence[str], window: Window, weeks: int) -> int:
+        """Read the whole lattice, window and baseline arms together, in one query.
+
+        No-op under ``per_combo``. Returns the number of cells cached, which the caller logs so
+        the batch is visible in the trace rather than being an invisible speedup.
+
+        ``combo`` is a column, so asking for forty-six of them costs one ``IN`` and one more
+        grouping key. The result is the same rows the per-combo path would fetch one at a time.
+        Combos the grain does not materialize are skipped rather than raising: this is a
+        prefetch, and a caller that genuinely needs one still gets the honest refusal from
+        ``_require_stored`` when it asks.
+        """
+        if self.read_mode != "batch":
+            return 0
+
+        wanted = [c for c in dict.fromkeys(combos) if (c, window, weeks) not in self._lattice]
+        stored: dict[str, list[str]] = {}
+        for combo in wanted:
+            try:
+                stored[combo] = _require_stored(combo, window)
+            except ComboNotStored:
+                continue
+        if not stored:
+            return 0
+
+        rows = self.ch.query(
+            f"""SELECT combo, w, key_a, key_b, {_SUMS}
+                FROM (
+                    SELECT bucket, combo, key_a, key_b, {', '.join(COUNTER_COLUMNS)}
+                    FROM {window.table}
+                    WHERE combo IN {{combos:Array(String)}}
+                      AND bucket >= {{hist_start:DateTime}} AND bucket < {{e:DateTime}}
+                )
+                ARRAY JOIN range(0, {{k:UInt8}} + 1) AS w
+                WHERE bucket >= {{s:DateTime}} - toIntervalWeek(w)
+                  AND bucket <  {{e:DateTime}} - toIntervalWeek(w)
+                GROUP BY combo, w, key_a, key_b""",
+            {
+                "combos": list(stored),
+                "s": window.start,
+                "e": window.end,
+                "hist_start": window.shifted(weeks).start,
+                "k": weeks,
+            },
+            name="rollup_lattice_batch",
+        )
+
+        # Every requested combo gets an entry even if it came back empty, so a later call
+        # reads "nothing there" from the cache instead of going to the network to be told the
+        # same thing.
+        cells: dict[str, dict[Segment, list[Counters]]] = {c: {} for c in stored}
+        for row in rows:
+            combo, w = row[0], int(row[1])
+            dims = stored[combo]
+            if not dims:
+                seg = Segment.total()
+            elif len(dims) == 1:
+                seg = Segment(((dims[0], row[2]),))
+            else:
+                seg = Segment(tuple(sorted(((dims[0], row[2]), (dims[1], row[3])))))
+            slot = cells[combo].setdefault(seg, [Counters() for _ in range(weeks + 1)])
+            slot[w] = _row_to_counters(row[4:])
+
+        for combo, found in cells.items():
+            self._lattice[(combo, window, weeks)] = found
+        return sum(len(v) for v in cells.values())
+
+    def segment_with_history(
+        self, segment: Segment, window: Window, weeks: int
+    ) -> list[Counters]:
+        """One segment over the window and each aligned baseline week, index 0 the window.
+
+        The same shape ``slice_with_history`` returns for a whole combo, for a single cell.
+        Served from a prefetched lattice when one covers this window, which is what turns the
+        holdout -- two half-windows times five arms for every candidate tested -- from a few
+        hundred round trips into a read from memory.
+        """
+        cached = self._lattice.get((segment.combo, window, weeks))
+        if cached is not None:
+            return cached.get(segment, [Counters() for _ in range(weeks + 1)])
+        return [self.segment(segment, window.shifted(w)) for w in range(weeks + 1)]
+
     def slice(self, combo: str, window: Window) -> dict[Segment, Counters]:
         """Every occupied cell of one combo over one window."""
         dims = _require_stored(combo, window)
+
+        # Arm 0 of a prefetched lattice is exactly this window, so the structural detector
+        # rides on the batch the temporal one already paid for.
+        for (cached_combo, cached_window, _), cells in self._lattice.items():
+            if cached_combo == combo and cached_window == window:
+                return {seg: arms[0] for seg, arms in cells.items()}
+
         rows = self.ch.query(
             f"""SELECT key_a, key_b, {_SUMS} FROM {window.table}
                 WHERE combo = {{combo:String}} AND bucket >= {{s:DateTime}} AND bucket < {{e:DateTime}}
@@ -328,6 +441,11 @@ class RollupReader:
         separate reads would shift the baseline underneath the observation.
         """
         dims = _require_stored(combo, window)
+
+        cached = self._lattice.get((combo, window, weeks))
+        if cached is not None:
+            return cached
+
         rows = self.ch.query(
             f"""SELECT w, key_a, key_b, {_SUMS}
                 FROM (

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from verdict.config import load_config
-from verdict.detect import _lattice_combos
+from verdict.detect import lattice_combos
 from verdict.metrics import MetricRegistry
 from verdict.schema import (
     GRAINS,
@@ -66,7 +66,7 @@ class TestReadersMatchStorage:
     def test_detector_never_requests_a_combo_deeper_than_the_grain(self, grain, metric_name):
         metric = REGISTRY.metric(metric_name)
         depth = LATTICE_DEPTH[grain]
-        for combo in _lattice_combos(REGISTRY, metric, grain):
+        for combo in lattice_combos(REGISTRY, metric, grain):
             if combo == TOTAL_COMBO:
                 continue
             assert len(combo.split("|")) <= depth, (
@@ -76,7 +76,7 @@ class TestReadersMatchStorage:
     def test_the_detector_still_reaches_two_way_cells_somewhere(self):
         """Guard against 'fixing' the mismatch by making every grain shallow."""
         metric = REGISTRY.metric("fill_rate")
-        assert any("|" in c for c in _lattice_combos(REGISTRY, metric, "1h"))
+        assert any("|" in c for c in lattice_combos(REGISTRY, metric, "1h"))
 
 
 class TestViewChain:

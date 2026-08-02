@@ -573,10 +573,8 @@ def holdout_check(
         return Check("holdout", "unknown", None, "Window too short to split.")
 
     def effect(part: Window) -> float | None:
-        observed = reader.segment(candidate.segment, part)
-        history = [
-            reader.segment(candidate.segment, part.shifted(w)) for w in range(1, weeks + 1)
-        ]
+        arms = reader.segment_with_history(candidate.segment, part, weeks)
+        observed, history = arms[0], arms[1:]
         # Trimmed on its own history rather than the localization's shared mask. This compares
         # one segment against itself over half-windows, so no cross-segment subtraction happens
         # and nesting is not at stake; and a week that was atypical across the whole window is
@@ -960,7 +958,23 @@ class Localizer:
         rejected: list[Candidate] = []
         accused: Candidate | None = None
 
-        for candidate in viable[:_MAX_HOLDOUT_TRIALS]:
+        trials = viable[:_MAX_HOLDOUT_TRIALS]
+        if self.cfg.holdout_enabled and trials:
+            # Both halves, every candidate, in two queries rather than ten per candidate. The
+            # loop below usually stops at the first candidate, so this reads more cells than it
+            # strictly needs -- but one round trip to a remote cluster costs more than the extra
+            # rows, and the halves are the same lattice the localizer has already narrowed.
+            midpoint = window.start + window.duration / 2
+            halves = (
+                Window(window.start, midpoint, window.grain),
+                Window(midpoint, window.end, window.grain),
+            )
+            combos = [c.segment.combo for c in trials]
+            if midpoint > window.start and window.end > midpoint:
+                for half in halves:
+                    self.reader.prefetch_lattice(combos, half, self.detection.baseline_weeks)
+
+        for candidate in trials:
             if self.cfg.holdout_enabled:
                 candidate.checks["holdout"] = holdout_check(
                     self.reader, metric, candidate, window, self.detection.baseline_weeks
