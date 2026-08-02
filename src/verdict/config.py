@@ -210,6 +210,15 @@ class DetectionConfig(BaseModel):
     structural_z_threshold: float = 5.0
     structural_min_window_days: int = 1
 
+    # Whether to check that the temporal baseline still describes the population before
+    # trusting anything it says. See verdict/baseline.py.
+    baseline_audit_enabled: bool = True
+    baseline_audit_windows: int = 2
+    # Share of tested cells a calibrated baseline may flag on a recent window. A correct
+    # baseline flags roughly the false-discovery rate plus whatever genuinely happened, so
+    # single digits. Ten percent is generous; the failure this catches sits above forty.
+    baseline_audit_max_flagged: float = 0.10
+
 
 class LocalizationConfig(BaseModel):
     max_candidates: int = 40

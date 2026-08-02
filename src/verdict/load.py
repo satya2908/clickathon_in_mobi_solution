@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -414,6 +416,192 @@ def load_all(
     report = LoadReport()
     load_dimensions(ch, data, report)
     load_facts(ch, data, report, limit_rows=limit_rows)
+    verify_integrity(ch, report)
+    backfill_rollups(ch, registry, report)
+    verify_rollups(ch, registry, report)
+    return report
+
+
+@dataclass
+class IngestReport:
+    """What one batch cost, stage by stage."""
+
+    events: int = 0
+    file_bytes: int = 0
+    corpus_before: int = 0
+    corpus_after: int = 0
+    dimensions_refreshed: bool = False
+    refresh_s: float = 0.0
+    read_s: float = 0.0
+    insert_s: float = 0.0
+    verify_s: float = 0.0
+    batch_window: tuple[datetime, datetime] | None = None
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def ingest_s(self) -> float:
+        """Arrival to queryable: everything that has to happen before a detector can read it."""
+        return self.refresh_s + self.read_s + self.insert_s
+
+
+def dimensions_changed(ch: ClickHouse, data_dir: Path) -> bool:
+    """Whether the CSVs in this folder say something different from the loaded dimension tables.
+
+    Compared by value rather than by presence, because a release that reissues the dimension
+    files unchanged is the common case and rebuilding the whole lattice for it would turn a
+    twenty-second ingest into a three-minute one.
+    """
+    for table, (filename, columns) in DIM_FILES.items():
+        path = data_dir / filename
+        if not path.exists():
+            continue
+        assert_not_lfs_stub(path)
+        with path.open(newline="") as fh:
+            incoming = sorted(tuple(r[c] for c in columns) for r in csv.DictReader(fh))
+        loaded = sorted(
+            tuple(str(v) for v in row)
+            for row in ch.query(f"SELECT {', '.join(columns)} FROM {table}", name=f"dump_{table}")
+        )
+        if incoming != loaded:
+            log.info("%s differs from %s; dimensions need refreshing", filename, table)
+            return True
+    return False
+
+
+def ingest(ch: ClickHouse, registry: MetricRegistry, path: str | Path) -> IngestReport:
+    """Add one batch of events to a corpus that is already loaded, and leave it queryable.
+
+    Nothing is truncated. The materialized views carry the new rows up through rollup_5m,
+    rollup_1h and rollup_1d as they go in, so "ingested" and "readable at every grain" are the
+    same instant -- which is the only definition of ingest latency that means anything to a
+    detector waiting on the data.
+
+    If the folder also carries dimension CSVs and they differ from what is loaded, the rollups
+    over the existing events are re-derived first. Skipping that would leave history describing
+    segments by their old attributes and the new batch describing them by their new ones, and
+    every baseline would then compare two different populations wearing one label.
+    """
+    p = Path(path)
+    if p.is_dir():
+        data_dir, fact = p, p / FACT_FILE
+    else:
+        data_dir, fact = p.parent, p
+    if not fact.exists():
+        raise LoadError(f"No events file at {fact}")
+    assert_not_lfs_stub(fact)
+
+    report = IngestReport(file_bytes=fact.stat().st_size)
+    pf = pq.ParquetFile(fact)
+    report.events = pf.metadata.num_rows
+    missing = [c for c in FACT_COLUMNS if c not in set(pf.schema_arrow.names)]
+    if missing:
+        raise LoadError(f"{fact.name} is missing column(s) {missing}")
+
+    report.corpus_before = int(
+        ch.scalar("SELECT count() FROM ad_events", name="count_before", default=0)
+    )
+
+    if dimensions_changed(ch, data_dir):
+        start = time.perf_counter()
+        refreshed = refresh_dimensions(ch, registry, data_dir)
+        report.refresh_s = time.perf_counter() - start
+        report.dimensions_refreshed = True
+        report.warnings.extend(refreshed.warnings)
+    else:
+        # Still forced on every node: the views resolve dimensions through dictGet as the rows
+        # go in, and a node serving a dictionary from a previous load attributes the whole batch
+        # to the wrong segments without raising anything.
+        reload_dictionaries(ch)
+        verify_dictionaries(ch)
+
+    for rg in range(pf.metadata.num_row_groups):
+        start = time.perf_counter()
+        table = pf.read_row_group(rg, columns=FACT_COLUMNS)
+        report.read_s += time.perf_counter() - start
+        start = time.perf_counter()
+        ch.insert_arrow("ad_events", table, name=f"ingest_rg{rg}")
+        report.insert_s += time.perf_counter() - start
+
+    start = time.perf_counter()
+    report.corpus_after = int(
+        ch.scalar("SELECT count() FROM ad_events", name="count_after", default=0)
+    )
+    if report.corpus_after - report.corpus_before != report.events:
+        raise LoadError(
+            f"Inserted {report.events:,} rows but the corpus grew by "
+            f"{report.corpus_after - report.corpus_before:,}. Refusing to report a batch as "
+            "ingested when the count disagrees."
+        )
+    report.batch_window = _verify_batch(ch, fact, report.events)
+    report.verify_s = time.perf_counter() - start
+    return report
+
+
+def _verify_batch(ch: ClickHouse, fact: Path, events: int) -> tuple[datetime, datetime]:
+    """Reconcile every rollup grain against raw over the batch's own window.
+
+    The global check in `verify_rollups` scans the whole corpus and is too slow to run per batch;
+    this asks the same question about the rows that just arrived.
+    """
+    import pyarrow.compute as pc
+
+    times = pq.read_table(fact, columns=["event_time"])["event_time"]
+    lo, hi = pc.min(times).as_py(), pc.max(times).as_py()
+
+    raw, r5m, r1h, r1d = ch.query(
+        """
+        SELECT
+          (SELECT count() FROM ad_events
+             WHERE event_time BETWEEN {lo:DateTime} AND {hi:DateTime})            AS raw,
+          (SELECT sum(requests) FROM rollup_5m
+             WHERE combo='__all__' AND bucket BETWEEN {lo:DateTime} AND {hi:DateTime}) AS r5m,
+          (SELECT sum(requests) FROM rollup_1h
+             WHERE combo='__all__' AND bucket BETWEEN {lo:DateTime} AND {hi:DateTime}) AS r1h,
+          (SELECT sum(requests) FROM rollup_1d
+             WHERE combo='__all__' AND bucket BETWEEN {lo:DateTime} AND {hi:DateTime}) AS r1d
+        """,
+        {"lo": lo, "hi": hi},
+        name="verify_batch",
+    )[0]
+
+    grains = {"rollup_5m": int(r5m), "rollup_1h": int(r1h), "rollup_1d": int(r1d)}
+    disagree = {name: n for name, n in grains.items() if n != int(raw)}
+    if disagree:
+        raise LoadError(
+            f"Over the batch window {lo} to {hi}, ad_events holds {int(raw):,} rows but "
+            + ", ".join(f"{name} holds {n:,}" for name, n in disagree.items())
+            + ". The batch is not queryable at every grain."
+        )
+    log.info("batch verified: %s rows agree across raw and all three grains", f"{events:,}")
+    return lo, hi
+
+
+def refresh_dimensions(ch: ClickHouse, registry: MetricRegistry, data_dir: str | Path) -> LoadReport:
+    """Swap the dimension tables and rebuild the rollups over the events already loaded.
+
+    The rollups denormalise `region`, `os_version` and the rest as the rows go in, so new
+    dimension values do not reach data that is already stored: every existing rollup row keeps
+    encoding the previous meaning of its segment, and comparing across the swap compares two
+    different populations wearing the same label.
+
+    Reloading the whole corpus fixes that and is mostly wasted work, because `ad_events` is
+    unchanged -- only the projection of it is stale. This re-derives the rollups from the facts
+    already in ClickHouse, which costs a scan rather than a re-upload.
+    """
+    data = Path(data_dir)
+    if not data.is_dir():
+        raise LoadError(f"Data directory {data} does not exist")
+
+    report = LoadReport()
+    load_dimensions(ch, data, report)
+
+    report.fact_rows = int(ch.scalar("SELECT count() FROM ad_events", name="count_facts", default=0))
+    if not report.fact_rows:
+        raise LoadError(
+            "ad_events is empty, so there is nothing to re-derive. Use `verdict load` to import "
+            "a corpus first."
+        )
+
     verify_integrity(ch, report)
     backfill_rollups(ch, registry, report)
     verify_rollups(ch, registry, report)

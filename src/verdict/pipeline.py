@@ -29,10 +29,11 @@ from __future__ import annotations
 import logging
 import subprocess
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from .baseline import BaselineAudit, audit_baseline
 from .config import Config
 from .db import ClickHouse
 from .detect import (
@@ -103,10 +104,15 @@ class InvestigationResult:
     # case, and no case is indistinguishable from a clean window. A typo in a trace call once
     # emptied every fill_rate case from a run that still reported success.
     failures: list[str] = field(default_factory=list)
+    baseline_audit: BaselineAudit | None = None
 
     @property
     def publishable(self) -> list[Case]:
         return [c for c in self.cases if c.confidence_value >= 0.0 and c.verdict_kind == "localized"]
+
+    @property
+    def temporal_disabled(self) -> bool:
+        return self.baseline_audit is not None and not self.baseline_audit.trustworthy
 
     def summary(self) -> str:
         out = (
@@ -114,6 +120,8 @@ class InvestigationResult:
             f"{len(self.metrics_scanned)} metrics, {self.findings_after_correction} findings "
             f"survived correction, {len(self.cases)} case(s), {len(self.gaps)} coverage gap(s)"
         )
+        if self.temporal_disabled:
+            out += ", STRUCTURAL ONLY (baseline rejected)"
         if self.failures:
             out += f", {len(self.failures)} localization(s) FAILED"
         return out
@@ -260,12 +268,16 @@ def detect_all(
     metrics: list[str] | None = None,
     tracer: Tracer | None = None,
     structural: bool = True,
+    temporal_enabled: bool = True,
 ) -> tuple[DetectionResult, DetectionResult]:
     """Run both detectors over every requested metric, returning them unmixed.
 
     They are kept apart because only one of them can be FDR-corrected honestly; see the module
     docstring. Callers that want a single list should correct the temporal result first and then
     concatenate, which is what ``investigate`` does.
+
+    ``temporal_enabled`` is switched off when the baseline audit finds that history no longer
+    describes the population; the structural detector needs none and carries the run alone.
     """
     names = metrics or list(registry.metrics)
     temporal = DetectionResult()
@@ -285,9 +297,10 @@ def detect_all(
         )
 
     for name in names:
-        result = detect_temporal(reader, registry, cfg.detection, name, window, tracer=tracer, correct=False)
-        temporal.findings.extend(result.findings)
-        temporal.gaps.extend(result.gaps)
+        if temporal_enabled:
+            result = detect_temporal(reader, registry, cfg.detection, name, window, tracer=tracer, correct=False)
+            temporal.findings.extend(result.findings)
+            temporal.gaps.extend(result.gaps)
 
         if not structural:
             continue
@@ -371,14 +384,36 @@ def _investigate(
         except Exception as exc:  # noqa: BLE001
             log.warning("Could not open run row: %s", exc)
 
+    if cfg.detection.baseline_audit_enabled:
+        with tracer.span("audit", kind="statistics") as span:
+            span.what("Checked whether the baseline still describes this population")
+            span.why(
+                "A baseline drawn from a population that has since changed produces confident, "
+                "internally consistent, wrong answers, and nothing downstream can detect that. "
+                "A calibrated baseline disagrees with a few percent of a recent window; one "
+                "describing the wrong population disagrees with most of it."
+            )
+            result.baseline_audit = audit_baseline(
+                reader, registry, cfg, window, metrics=result.metrics_scanned
+            )
+            span.result(result.baseline_audit.headline)
+
+    use_temporal = result.baseline_audit is None or result.baseline_audit.trustworthy
+    if not use_temporal:
+        log.error("%s", result.baseline_audit.detail)
+
     with tracer.span("detect", kind="detector") as span:
         span.what(f"Scanned {len(result.metrics_scanned)} metric(s) over {window.label()} at {window.grain}")
         span.why(
             "Every cell in the lattice is compared against its own history and against its "
             "siblings, because an incident confined to one cell is invisible in the total."
+            if use_temporal
+            else "History failed its audit, so only the structural comparison against siblings "
+            "in the same bucket is used. It needs no baseline and is unaffected."
         )
         temporal, struct = detect_all(
-            reader, registry, cfg, window, metrics=metrics, tracer=tracer, structural=True
+            reader, registry, cfg, window, metrics=metrics, tracer=tracer,
+            structural=True, temporal_enabled=use_temporal,
         )
         result.cells_tested = len(temporal.findings)
         span.result(
@@ -439,6 +474,16 @@ def _investigate(
                 span.result(f"failed: {exc}")
                 result.failures.append(f"{entry.metric}: {exc}")
                 continue
+            if not use_temporal and localization.accused is not None:
+                # Every counterfactual the localizer applies -- sufficiency, minimality,
+                # maximality, holdout -- asks whether something returned to *expectation*, and
+                # expectation comes from the history this run has already rejected. Naming a
+                # segment on that basis would launder a baseline we do not believe into a
+                # verdict we would defend. The finding stands, because the structural detector
+                # reached it without history; the accusation does not.
+                localization = replace(
+                    localization, accused=None, mode="baseline_rejected"
+                )
             accused = localization.accused
             span.result(
                 f"accused {accused.segment.label()}" if accused else f"no candidate accused ({localization.mode})"

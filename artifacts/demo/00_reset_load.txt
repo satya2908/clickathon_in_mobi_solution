@@ -1,0 +1,54 @@
+08:31:12 INFO    verdict.load: loaded dim_apps: 2000 rows
+08:31:12 INFO    verdict.load: loaded dim_advertisers: 500 rows
+08:31:12 INFO    verdict.load: loaded dim_geo_device: 5000 rows
+08:31:13 INFO    verdict.load: reloaded 3 dictionaries on cluster default
+08:31:13 INFO    verdict.load: dictionary dict_apps: 2,000 elements, 2 node(s) agree
+08:31:13 INFO    verdict.load: dictionary dict_advertisers: 500 elements, 2 node(s) agree
+08:31:14 INFO    verdict.load: dictionary dict_geo_device: 5,000 elements, 2 node(s) agree
+08:31:35 INFO    verdict.load: loaded row group 1/9 (1,000,000 rows total)
+08:31:56 INFO    verdict.load: loaded row group 2/9 (2,000,000 rows total)
+08:32:17 INFO    verdict.load: loaded row group 3/9 (3,000,000 rows total)
+08:32:38 INFO    verdict.load: loaded row group 4/9 (4,000,000 rows total)
+08:33:03 INFO    verdict.load: loaded row group 5/9 (5,000,000 rows total)
+08:33:28 INFO    verdict.load: loaded row group 6/9 (6,000,000 rows total)
+08:33:51 INFO    verdict.load: loaded row group 7/9 (7,000,000 rows total)
+08:34:12 INFO    verdict.load: loaded row group 8/9 (8,000,000 rows total)
+08:34:33 INFO    verdict.load: loaded row group 9/9 (9,000,000 rows total)
+08:34:35 INFO    verdict.load: running backfill_5m
+08:34:39 INFO    verdict.load: running backfill_1h
+08:34:52 WARNING verdict.db: optimize_rollup_5m did not run: Received ClickHouse exception, code: 388, server response: Code: 388. DB::Exception: Cannot run optimize, background pool is already full, try to execute in synchronous mode (alter_sync >= 1). (CANNOT_ASSIGN_OPTIMIZE) (for url https://d0l43ficy9.ap-south-1.aws.clickhouse.cloud:8443)
+             Load report             
+┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
+┃ Object          ┃            Rows ┃
+┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
+│ dim_apps        │           2,000 │
+│ dim_advertisers │             500 │
+│ dim_geo_device  │           5,000 │
+│ ad_events       │       9,000,000 │
+│ rollup_5m       │  655,199  (14x) │
+│ rollup_1h       │ 1,445,606  (6x) │
+│ rollup_1d       │  60,235  (149x) │
+└─────────────────┴─────────────────┘
+   Global metrics (raw and   
+        rollup agree)        
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ Metric      ┃       Value ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
+│ requests    │       9e+06 │
+│ fills       │ 7.02791e+06 │
+│ fill_rate   │    0.780879 │
+│ impressions │ 6.88706e+06 │
+│ render_rate │    0.979958 │
+│ clicks      │      74,940 │
+│ ctr         │   0.0108813 │
+│ revenue     │    17,020.4 │
+│ ecpm        │     2.47135 │
+│ rpr         │  0.00189115 │
+└─────────────┴─────────────┘
+
+Event window: 2026-06-01 00:00:00 to 2026-07-05 23:59:59
+warning rollup_5m was not compacted: the merge pool was busy. Row counts below 
+are pre-merge and will fall as ClickHouse merges in the background. No total 
+changes, because reads aggregate explicitly.
+
+Load verified

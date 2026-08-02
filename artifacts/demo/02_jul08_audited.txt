@@ -1,0 +1,49 @@
+Investigating 2026-07-08 00:00 to 2026-07-09 00:00 at 1h grain
+08:50:00 INFO    verdict.baseline: Baseline audit on 2026-07-07 00:00 to 2026-07-08 00:00: 6,198 of 14,736 cells flagged (42.1%)
+08:50:01 INFO    verdict.baseline: Baseline audit on 2026-07-06 00:00 to 2026-07-07 00:00: 6,250 of 14,748 cells flagged (42.4%)
+08:50:01 ERROR   verdict.pipeline: Baseline rejected: 42.1% of all tested cells are flagged on a recent window, against a bar of 10%. A baseline that disagrees with that much of the grid is not describing this population, so every temporal comparison drawn from it -- the expected values, the effect sizes and the significance -- would be measured against the wrong thing. Temporal detection is therefore switched off for this run and only the structural detector, which uses no history, is reported.
+08:50:01 INFO    verdict.pipeline: Prefetched 1,721 cells across 46 combos in one query
+08:50:03 INFO    verdict.pipeline: Collapsed 4 case(s) that reached the same conclusion
+
+run ad54fd01ce13432eabfaa9180da36895: 0 cells tested across 10 metrics, 159 
+findings survived correction, 9 case(s), 1090 coverage gap(s), STRUCTURAL ONLY 
+(baseline rejected)
+
+Baseline rejected: 42.1% of all tested cells are flagged on a recent window, 
+against a bar of 10%. A baseline that disagrees with that much of the grid is 
+not describing this population, so every temporal comparison drawn from it -- 
+the expected values, the effect sizes and the significance -- would be measured 
+against the wrong thing. Temporal detection is therefore switched off for this 
+run and only the structural detector, which uses no history, is reported.
+
+                                     Cases                                      
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━┳━━━━━━━━┓
+┃ Metric   ┃ Verdict ┃ Segment  ┃ Observ… ┃ Expected ┃  Effect ┃ Conf ┃ Impact ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━╇━━━━━━━━┩
+│ ecpm     │ locali… │ device_… │  1.7666 │   3.4414 │  -48.7% │ 0.70 │    -33 │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ fill_ra… │ locali… │ publish… │ 0.62007 │  0.82013 │  -24.4% │ 0.63 │   -37* │
+│ fills    │ locali… │ publish… │  47,465 │   39,239 │  +21.0% │ 0.63 │        │
+│ impress… │ locali… │ publish… │  46,469 │   38,475 │  +20.8% │ 0.62 │        │
+│ rpr      │ locali… │ country… │ 0.0009… │ 0.00248… │  -62.7% │ 0.57 │    -83 │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ region=… │         │          │         │      │        │
+│ clicks   │ locali… │ publish… │      51 │      101 │  -49.5% │ 0.45 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ vertica… │         │          │         │      │        │
+│ clicks   │ locali… │ publish… │     148 │      110 │  +34.5% │ 0.33 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ vertica… │         │          │         │      │        │
+│ requests │ unloca… │ device_… │  41,770 │  7,586.9 │ +450.6% │ 0.00 │        │
+│          │         │ 14 AND   │         │          │         │      │        │
+│          │         │ os_vers… │         │          │         │      │        │
+│          │         │ 17.5     │         │          │         │      │        │
+│ requests │ unloca… │ categor… │  29,879 │   65,430 │  -54.3% │ 0.00 │        │
+│          │         │ AND      │         │          │         │      │        │
+│          │         │ publish… │         │          │         │      │        │
+└──────────┴─────────┴──────────┴─────────┴──────────┴─────────┴──────┴────────┘
+* revenue reached through a chain of estimates; see impact_json for the basis.
+Coverage: 1,090 cell(s) could not be tested (313 below_detection_floor, 36 
+no_sampling_model, 741 non_positive_value)

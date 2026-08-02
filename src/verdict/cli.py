@@ -18,6 +18,7 @@ from .db import ClickHouse
 from .metrics import MetricRegistry
 
 if TYPE_CHECKING:
+    from .load import LoadReport
     from .query import Window
 
 app = typer.Typer(
@@ -225,7 +226,12 @@ def load_cmd(
         console.print(f"[bold red]Load failed[/]\n{exc}")
         raise typer.Exit(1) from exc
 
-    table = Table(title="Load report", show_header=True, header_style="bold")
+    _print_load_report(report, title="Load report")
+    console.print("\n[green]Load verified[/]")
+
+
+def _print_load_report(report: LoadReport, *, title: str) -> None:
+    table = Table(title=title, show_header=True, header_style="bold")
     table.add_column("Object")
     table.add_column("Rows", justify="right")
     for name, count in report.dim_rows.items():
@@ -246,7 +252,39 @@ def load_cmd(
     console.print(f"\nEvent window: [bold]{report.window[0]}[/] to [bold]{report.window[1]}[/]")
     for warning in report.warnings:
         console.print(f"[yellow]warning[/] {warning}")
-    console.print("\n[green]Load verified[/]")
+
+
+@app.command("refresh-dimensions")
+def refresh_dimensions_cmd(
+    config: str = typer.Option(None, "--config", "-c"),
+    data_dir: str = typer.Option(None, "--data-dir", "-d", help="Folder holding the dimension CSVs"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Swap the dimension tables and rebuild the rollups over the events already loaded.
+
+    For when a release reissues the dimension CSVs with the same IDs and different attribute
+    values. The facts are unchanged; only the rollups' copy of the attributes is stale, so this
+    re-derives them in place instead of re-uploading the corpus.
+    """
+    _setup_logging(verbose)
+    from .load import LoadError, refresh_dimensions
+
+    cfg = _load(config)
+    registry = _registry()
+    ch = ClickHouse(cfg.clickhouse)
+    target = data_dir or cfg.run.data_dir
+
+    try:
+        report = refresh_dimensions(ch, registry, target)
+    except LoadError as exc:
+        console.print(f"[bold red]Refresh failed[/]\n{exc}")
+        raise typer.Exit(1) from exc
+
+    _print_load_report(report, title="Dimensions refreshed")
+    console.print(
+        "\n[green]Rollups re-derived from the events already loaded[/] — every segment now "
+        "means what the new dimension tables say it means, in history as well as in new data."
+    )
 
 
 def _resolve_window(ch: ClickHouse, start: str | None, hours: int, grain: str) -> Window:
@@ -376,6 +414,92 @@ def inject_cmd(
     )
 
 
+@app.command("ingest")
+def ingest_cmd(
+    path: str = typer.Argument(..., help="A folder holding ad_events.parquet (and optionally the dimension CSVs), or the parquet itself"),
+    config: str = typer.Option(None, "--config", "-c"),
+    hours: int = typer.Option(24, "--hours", help="Investigation window size; the batch is tiled into windows this long"),
+    grain: str = typer.Option("1h", "--grain", help="Bucket size: 5m, 1h or 1d"),
+    metric: list[str] = typer.Option(None, "--metric", "-m", help="Restrict to these metrics; repeatable"),
+    no_analyse: bool = typer.Option(False, "--no-analyse", help="Ingest only; do not investigate"),
+    no_persist: bool = typer.Option(False, "--no-persist", help="Investigate without writing to ClickHouse"),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Force template narration"),
+    max_cases: int = typer.Option(25, "--max-cases"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Add a batch of events to the loaded corpus and investigate what arrived.
+
+    The whole loop in one command: append the events without disturbing what is already there,
+    refresh the dimensions if the release reissued them, confirm the batch is readable at every
+    grain, then investigate each window it covers.
+    """
+    _setup_logging(verbose)
+    from datetime import timedelta
+
+    from .load import LoadError, ingest
+    from .query import Window
+
+    cfg = _load(config)
+    registry = _registry()
+    ch = ClickHouse(cfg.clickhouse)
+
+    try:
+        report = ingest(ch, registry, path)
+    except LoadError as exc:
+        console.print(f"[bold red]Ingest failed[/]\n{exc}")
+        raise typer.Exit(1) from exc
+
+    size = Table(title="Ingested", header_style="bold")
+    size.add_column("")
+    size.add_column("", justify="right")
+    size.add_row("Events", f"{report.events:,}")
+    size.add_row("File", f"{report.file_bytes / 1024 / 1024:.1f} MiB")
+    size.add_row("Corpus", f"{report.corpus_before:,} → {report.corpus_after:,}")
+    if report.batch_window:
+        size.add_row("Window", f"{report.batch_window[0]} to {report.batch_window[1]}")
+    if report.dimensions_refreshed:
+        size.add_row("Dimensions", f"reissued — rollups re-derived in {report.refresh_s:,.1f}s")
+    size.add_row("Read", f"{report.read_s:,.2f}s")
+    size.add_row("Insert and roll up", f"{report.insert_s:,.2f}s")
+    size.add_row("Verify", f"{report.verify_s:,.2f}s")
+    size.add_row(
+        "Queryable after",
+        f"{report.ingest_s:,.2f}s  ({report.events / report.ingest_s:,.0f} events/s)"
+        if report.ingest_s
+        else "—",
+    )
+    console.print(size)
+    for warning in report.warnings:
+        console.print(f"[yellow]warning[/] {warning}")
+
+    if no_analyse or not report.batch_window:
+        return
+
+    # Tile the batch's own span rather than asking for a start time. The point of this command
+    # is that the data decides what to look at.
+    lo, hi = report.batch_window
+    step = timedelta(hours=hours)
+    begin = lo.replace(minute=0, second=0, microsecond=0)
+    if hours >= 24:
+        begin = begin.replace(hour=0)
+
+    windows = []
+    while begin <= hi:
+        windows.append(Window(start=begin, end=begin + step, grain=grain))
+        begin += step
+
+    console.print(
+        f"\n[bold]{len(windows)} window(s)[/] to investigate across the batch\n"
+    )
+    for window in windows:
+        _run_window(
+            cfg, ch, registry, window,
+            metrics=list(metric) if metric else None,
+            persist=not no_persist, narrate=not no_llm, max_cases=max_cases,
+        )
+        console.print()
+
+
 @app.command("investigate")
 def investigate_cmd(
     config: str = typer.Option(None, "--config", "-c"),
@@ -390,13 +514,34 @@ def investigate_cmd(
 ) -> None:
     """Detect, localize and explain anomalies in one window."""
     _setup_logging(verbose)
-    from .pipeline import investigate
-    from .trace import Tracer
 
     cfg = _load(config)
     registry = _registry()
     ch = ClickHouse(cfg.clickhouse)
     window = _resolve_window(ch, start, hours, grain)
+    _run_window(
+        cfg, ch, registry, window,
+        metrics=list(metric) if metric else None,
+        persist=not no_persist, narrate=not no_llm, max_cases=max_cases,
+    )
+
+
+def _run_window(
+    cfg: Config,
+    ch: ClickHouse,
+    registry: MetricRegistry,
+    window: Window,
+    *,
+    metrics: list[str] | None,
+    persist: bool,
+    narrate: bool,
+    max_cases: int,
+) -> object:
+    """Investigate one window and print everything it concluded."""
+    from .pipeline import investigate
+    from .trace import Tracer
+
+    no_persist = not persist
     tracer = Tracer(cfg.tracing)
 
     console.print(f"Investigating [bold]{window.label()}[/] at {window.grain} grain")
@@ -406,15 +551,19 @@ def investigate_cmd(
         ch,
         registry,
         window,
-        metrics=list(metric) if metric else None,
+        metrics=metrics,
         tracer=tracer,
-        persist=not no_persist,
-        narrate=not no_llm,
+        persist=persist,
+        narrate=narrate,
         max_cases=max_cases,
     )
     tracer.flush()
 
     console.print(f"\n{result.summary()}\n")
+
+    # First, because it changes how everything below it should be read.
+    if result.temporal_disabled:
+        console.print(f"[bold yellow]{result.baseline_audit.detail}[/]\n")
 
     # Before the all-clear, never after it. An empty case list means one of two opposite
     # things, and the reassuring one must not be printed while the other is true.
@@ -431,7 +580,7 @@ def investigate_cmd(
         if not result.failures:
             console.print("[green]No incident met the reporting bar.[/]")
         _print_coverage(result)
-        return
+        return result
 
     table = Table(title="Cases", show_header=True, header_style="bold")
     table.add_column("Metric")
@@ -467,6 +616,7 @@ def investigate_cmd(
         console.print(f"\n[green]Persisted[/] as run {result.run_id}")
     elif not no_persist:
         console.print("\n[yellow]One or more writes failed; see logs.[/]")
+    return result
 
 
 def _print_coverage(result: object) -> None:
