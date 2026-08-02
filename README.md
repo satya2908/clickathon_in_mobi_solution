@@ -674,10 +674,14 @@ artifacts/                  the architecture diagram, demo logs, unseen-bundle e
 day, the release pointed at the system from the console, the drill-down, the diagnosis,
 the trace, and a follow-up in chat.
 
+[`demo_1.mp4`](demo_1.mp4) — 3m30s, a walkthrough of the architecture: how a release
+becomes counter rollups, what the detectors and the cross-examination actually do, and
+where the model is and is not allowed to speak.
+
 [`pitch-deck.pdf`](pitch-deck.pdf). The slides are the artefact; the generator that
 produced them has been removed, so edits go through whichever tool you prefer.
 
-Both files are kept byte-identical with the copies in the submission folder.
+All three files are kept byte-identical with the copies in the submission folder.
 
 ### Screenshots
 
