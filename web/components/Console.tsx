@@ -354,11 +354,15 @@ export function Console({
                   ))}
                 </div>
 
+                {/* Everything after this sits on the right: the filters describe what you are
+                    looking at, these act on it. */}
+                <div className="push" />
+
                 {recommendationsEnabled && (
                   /* Off by default. Everything else on this page is measured; this is a model
                      proposing actions, and opting into that should be a decision rather than
                      something a reader discovers already switched on. */
-                  <label className="aitog sp" title={AI_HINT}>
+                  <label className="aitog" title={AI_HINT}>
                     <input
                       type="checkbox"
                       checked={recsOn}

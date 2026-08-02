@@ -95,11 +95,14 @@ services:
       # file, replaced from outside without touching the image.
       - ./config:/etc/verdict:ro
       - ${DATA_DIR:-./data}:/data:ro
+      # Where new releases are looked for, kept separate from the loaded corpus so that the only
+      # directory the ingest endpoint will open is one holding releases, and read-only besides.
+      - ${RELEASES_DIR:-..}:/releases:ro
       - ./out:/out
     # Serves the ingest endpoint the console's "Ingest release" control posts to, on the Compose
     # network only -- it is unauthenticated and deliberately has no host port. Still long-lived,
     # so `docker compose exec verdict verdict <command>` works during a demo exactly as before.
-    entrypoint: ["verdict", "serve", "--port", "8158", "--root", "/data"]
+    entrypoint: ["verdict", "serve", "--port", "8158", "--root", "/releases"]
 
   # ---- Console, http://localhost:3000 ----
   #
@@ -144,9 +147,12 @@ services:
       RECOMMEND_URL: ${RECOMMEND_URL:-http://cursor-cli-agent:8157}
       RECOMMEND_API_TOKEN: ${CURSOR_SERVICE_API_TOKEN:-}
       RECOMMEND_TIMEOUT_MS: ${RECOMMEND_TIMEOUT_MS:-360000}
-    extra_hosts:
-      # Docker Desktop provides this automatically; Linux does not.
-      - "host.docker.internal:host-gateway"
+    # Deliberately no host.docker.internal mapping. Docker Desktop already resolves that name to
+    # the address the host is reachable on, and pinning it to host-gateway replaces that with the
+    # VM's own bridge, which points back into the VM rather than at the host, so anything bound on
+    # the host refuses the connection. Linux has no built-in name: add
+    #   extra_hosts: ["host.docker.internal:host-gateway"]
+    # there, where host-gateway is the right answer.
 
   # ---- Optional Cursor CLI recommendations, http://localhost:8157 ----
   #

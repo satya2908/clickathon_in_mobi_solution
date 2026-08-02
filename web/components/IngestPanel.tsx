@@ -23,6 +23,20 @@ interface Result {
   error?: string;
 }
 
+function UploadIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 11V3m0 0L4.5 6.5M8 3l3.5 3.5M2.5 11.5v1a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function seconds(ms: number): string {
   return ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s` : `${(ms / 1000).toFixed(1)}s`;
 }
@@ -59,16 +73,17 @@ export function IngestPanel() {
   return (
     <div className="ingest">
       <button
-        className={`fchip${open ? ' on' : ''}`}
+        className={`fchip ingbtn${open ? ' open' : ''}`}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        title="Append a new release and investigate every window it covers, using the same command the terminal runs."
+        title="Append a new batch of events and investigate every window it covers, using the same command the terminal runs."
       >
-        Ingest release
+        <UploadIcon />
+        Ingest data
       </button>
 
       {open && (
-        <div className="ingpop" role="dialog" aria-label="Ingest a release">
+        <div className="ingpop" role="dialog" aria-label="Ingest data">
           <div className="ingrow">
             <input
               className="inp grow"

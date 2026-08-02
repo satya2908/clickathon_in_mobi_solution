@@ -663,7 +663,21 @@ src/verdict/
   trace.py store.py         spans, and everything that gets persisted
 web/                        the console (Next.js)
 config/                     behaviour as YAML; also the LibreChat and collector config
+artifacts/                  the architecture diagram, demo logs, unseen-bundle evidence
 ```
+
+---
+
+## Demo and deck
+
+[`demo.mp4`](demo.mp4) — 2m54s, recorded end to end against the unseen release: a quiet
+day, the release pointed at the system from the console, the drill-down, the diagnosis,
+the trace, and a follow-up in chat.
+
+[`pitch-deck.pdf`](pitch-deck.pdf). The slides are the artefact; the generator that
+produced them has been removed, so edits go through whichever tool you prefer.
+
+Both files are kept byte-identical with the copies in the submission folder.
 
 ---
 

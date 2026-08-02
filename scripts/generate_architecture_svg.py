@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - glyph coverage check is skipped withou
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "architecture" / "verdict-system-architecture.svg"
-FONT_DIR = ROOT / "artifacts" / "pitch_deck" / "fonts"
+FONT_DIR = ROOT / "artifacts" / "fonts"
 
 WIDTH = 1600
 HEIGHT = 900
