@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 app = typer.Typer(
     name="verdict",
-    help="Automated root-cause analyst for ad-tech metrics on ClickHouse.",
+    help="Autonomous investigator agent for ad-tech metrics on ClickHouse.",
     no_args_is_help=True,
     add_completion=False,
 )

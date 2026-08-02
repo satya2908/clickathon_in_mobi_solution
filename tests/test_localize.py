@@ -277,7 +277,7 @@ class TestCounterfactualsStayNested:
         Nothing raises and nothing looks odd -- the counterfactual is simply 2.2 points off,
         because the parent's expectation excludes week 1 while the child's includes it. A
         sufficiency score built on this is precise and wrong, which is the failure mode that
-        matters most for something calling itself a root-cause analyst.
+        matters most for something calling itself an autonomous investigator.
         """
         parent, child = self._world()
         p = expected_counters(parent, trim_mask(parent, FILL_RATE))

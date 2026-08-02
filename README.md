@@ -1,6 +1,6 @@
 # Verdict
 
-An automated root-cause analyst for ad-tech metrics, built on ClickHouse.
+An autonomous investigator agent for ad-tech metrics, built on ClickHouse.
 
 When a metric moves, Verdict finds the segment responsible, proves the claim by removing that
 segment and showing the parent metric returns to normal, publishes what it ruled out and why,

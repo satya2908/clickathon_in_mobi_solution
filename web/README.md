@@ -1,7 +1,7 @@
 # Verdict console
 
 Dashboard and observability UI for [verdict](../clickathon_in_mobi_solution) — the automated
-root-cause analyst for ad-tech metrics on ClickHouse.
+autonomous investigator agent for ad-tech metrics on ClickHouse.
 
 Currently a **UI mockup**: the layout, interactions and vocabulary are real, the numbers come
 from `lib/data.ts` rather than from ClickHouse.

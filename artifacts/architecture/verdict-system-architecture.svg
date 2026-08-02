@@ -25,7 +25,7 @@
 <text x="944" y="140" fill="#87878f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="600" text-anchor="start" letter-spacing="1.1">4 · INVESTIGATOR</text>
 <rect x="1318" y="116" width="242" height="520" rx="10" fill="#f8f8fa" stroke="#e4e4e9" stroke-width="1" />
 <text x="1334" y="140" fill="#87878f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="600" text-anchor="start" letter-spacing="1.1">5 · OUTPUTS</text>
-<rect x="40" y="660" width="1520" height="156" rx="10" fill="#f8f8fa" stroke="#e4e4e9" stroke-width="1" />
+<rect x="40" y="660" width="1520" height="172" rx="10" fill="#f8f8fa" stroke="#e4e4e9" stroke-width="1" />
 <text x="56" y="684" fill="#87878f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="600" text-anchor="start" letter-spacing="1.1">OBSERVABILITY</text>
 <polyline points="138,224 138,268" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
 <polyline points="138,398 138,356" fill="none" stroke="#b45309" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-b45309)" />
@@ -55,13 +55,14 @@
 <polyline points="1439,338 1439,368" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
 <polyline points="1439,434 1439,464" fill="none" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-4f46e5)" />
 <polyline points="1344,316 1331,316 1331,593 1344,593" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
-<polyline points="1018,526 1018,648 580,648 580,696" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-87878f)" />
-<rect x="764.5" y="637" width="71.0" height="19.42" rx="4" fill="#ffffff" />
-<text x="800" y="651" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11" font-weight="600" text-anchor="middle">every step</text>
-<polyline points="400,730 340,730" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
-<polyline points="760,730 820,730" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
-<polyline points="1080,716 1110,716 1110,710 1140,710" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
-<polyline points="1080,744 1110,744 1110,770 1140,770" fill="none" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-4f46e5)" />
+<polyline points="1018,526 1018,648 480,648 480,690" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-87878f)" />
+<rect x="724.5" y="637" width="71.0" height="19.42" rx="4" fill="#ffffff" />
+<text x="760" y="651" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11" font-weight="600" text-anchor="middle">every step</text>
+<polyline points="340,724 300,724" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
+<polyline points="620,716 660,716" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
+<polyline points="860,724 900,724" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
+<polyline points="1160,724 1200,724" fill="none" stroke="#87878f" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-87878f)" />
+<polyline points="620,736 640,736 640,796 660,796" fill="none" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 5" marker-end="url(#arrow-4f46e5)" />
 <rect x="54" y="156" width="168" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
 <circle cx="69" cy="175" r="4.5" fill="#059669" />
 <text x="82" y="181" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">Release files</text>
@@ -167,23 +168,28 @@
 <circle cx="1359" cy="579" r="4.5" fill="#059669" />
 <text x="1372" y="584" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" font-weight="600" text-anchor="start">LibreChat + MCP</text>
 <text x="1356" y="611.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="11.5" font-weight="400" text-anchor="start">read-only SQL</text>
-<rect x="60" y="696" width="280" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
-<circle cx="75" cy="715" r="4.5" fill="#059669" />
-<text x="88" y="721" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">case_steps</text>
-<text x="72" y="748.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">console waterfall</text>
-<rect x="400" y="696" width="360" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
-<circle cx="415" cy="715" r="4.5" fill="#059669" />
-<text x="428" y="721" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">Dual-sink tracer</text>
-<text x="412" y="748.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">every pipeline step</text>
-<rect x="820" y="696" width="260" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
-<circle cx="835" cy="715" r="4.5" fill="#059669" />
-<text x="848" y="721" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">OTLP collector</text>
-<text x="832" y="748.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">:4317 · :4318</text>
-<rect x="1140" y="688" width="400" height="44" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
-<circle cx="1155" cy="707" r="4.5" fill="#059669" />
-<text x="1168" y="713" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">Cloud otel_* + HyperDX</text>
-<rect x="1140" y="748" width="400" height="44" rx="7" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.2" stroke-dasharray="5 4" />
-<circle cx="1155" cy="767" r="4.5" fill="#4f46e5" />
-<text x="1168" y="773" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">Self-hosted ClickStack</text>
-<text x="40" y="864" fill="#87878f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="500" text-anchor="start">Solid = implemented flow · dashed = optional or in progress · ClickStack observes the investigation, it never decides it</text>
+<rect x="60" y="690" width="240" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
+<circle cx="75" cy="709" r="4.5" fill="#059669" />
+<text x="88" y="715" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">case_steps</text>
+<text x="72" y="742.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">console waterfall</text>
+<rect x="340" y="690" width="280" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
+<circle cx="355" cy="709" r="4.5" fill="#059669" />
+<text x="368" y="715" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">Dual-sink tracer</text>
+<text x="352" y="742.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">every pipeline step</text>
+<rect x="660" y="690" width="200" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
+<circle cx="675" cy="709" r="4.5" fill="#059669" />
+<text x="688" y="715" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">OTLP collector</text>
+<text x="672" y="742.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">:4317 · :4318</text>
+<rect x="900" y="690" width="260" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
+<circle cx="915" cy="709" r="4.5" fill="#059669" />
+<text x="928" y="715" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">ClickHouse Cloud</text>
+<text x="912" y="742.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">otel_* beside the ad data</text>
+<rect x="1200" y="690" width="340" height="68" rx="7" fill="#ffffff" stroke="#d3d3da" stroke-width="1.2" />
+<circle cx="1215" cy="709" r="4.5" fill="#059669" />
+<text x="1228" y="715" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">HyperDX</text>
+<text x="1212" y="742.5" fill="#55555f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12.5" font-weight="400" text-anchor="start">hosted · read-only view</text>
+<rect x="660" y="774" width="880" height="44" rx="7" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.2" stroke-dasharray="5 4" />
+<circle cx="675" cy="793" r="4.5" fill="#4f46e5" />
+<text x="688" y="799" fill="#1a1a1f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="600" text-anchor="start">Self-hosted ClickStack · replaces these three</text>
+<text x="40" y="864" fill="#87878f" font-family="Verdict Poppins, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="12" font-weight="500" text-anchor="start">Solid = implemented flow · dashed = optional or in progress · telemetry observes the investigation, it never decides it</text>
 </svg>

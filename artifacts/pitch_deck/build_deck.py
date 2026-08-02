@@ -592,22 +592,18 @@ def draw_svg(c: canvas.Canvas, svg_path: Path, x: float, top: float, scale: floa
     c.setLineJoin(0)
 
 
-def draw_image_cover(c: canvas.Canvas, image_path: Path, x: float, y: float, w: float, h: float) -> None:
+def draw_screenshot(c: canvas.Canvas, image_path: Path, x: float, y: float, w: float) -> float:
+    """Place the whole screenshot, undimmed and uncropped, and return its height."""
     image = Image.open(image_path).convert("RGB")
-    source_ratio = image.width / image.height
-    target_ratio = w / h
-    if source_ratio > target_ratio:
-        crop_w = int(image.height * target_ratio)
-        left = (image.width - crop_w) // 2
-        image = image.crop((left, 0, left + crop_w, image.height))
-    else:
-        crop_h = int(image.width / target_ratio)
-        top = (image.height - crop_h) // 2
-        image = image.crop((0, top, image.width, top + crop_h))
+    h = w * image.height / image.width
     buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=94, optimize=True)
+    image.save(buffer, format="PNG", optimize=True)
     buffer.seek(0)
-    c.drawImage(ImageReader(buffer), x, y, width=w, height=h, mask="auto")
+    c.drawImage(ImageReader(buffer), x, y, width=w, height=h)
+    c.setStrokeColor(LINE)
+    c.setLineWidth(1)
+    c.rect(x, y, w, h, stroke=1, fill=0)
+    return h
 
 
 def slide_1(c: canvas.Canvas) -> None:
@@ -839,7 +835,7 @@ def slide_3(c: canvas.Canvas) -> None:
     for label, cy, fill, label_color in (
         ("Metric", 230, WHITE, INK),
         ("LLM", 164, HexColor("#ECEBFF"), INDIGO),
-        ("Diagnosis", 98, WHITE, INK),
+        ("Diagnosis?", 98, WHITE, INK),
     ):
         rounded(c, 150, cy - 20, 180, 40, 10, fill, LINE, 1)
         text(c, label, 240, cy - 6, 13, FONT_SEMI, label_color, "center")
@@ -1059,10 +1055,21 @@ def slide_8(c: canvas.Canvas) -> None:
     arrow_down(c, 240, 220, 196, HexColor("#5C636E"), 1.5, 5)
     flow_box(c, "Evidence bundle", 145, 135, 190, PANEL_2, WHITE, GREEN)
 
-    ai_mark(c, 720, 368, 46, INDIGO)
-    text(c, "LLM", 720, 300, 15, FONT_SEMI, INK, "center")
-    arrow_down(c, 720, 280, 246, MID, 1.5, 5)
-    flow_box(c, "Narrative", 625, 183, 190, PAPER, INK, LINE)
+    ai_mark(c, 720, 394, 46, INDIGO)
+    text(c, "LLM", 720, 326, 15, FONT_SEMI, INK, "center")
+    arrow_down(c, 720, 306, 286, MID, 1.5, 5)
+    flow_box(c, "Narrative", 625, 225, 190, PAPER, INK, LINE)
+
+    c.setStrokeColor(MID)
+    c.setLineWidth(1.5)
+    c.setDash(3, 3)
+    c.line(720, 220, 720, 201)
+    c.setDash()
+    polygon(c, [(720, 196), (715, 202), (725, 202)], MID)
+    c.setDash(4, 3)
+    rounded(c, 625, 135, 190, 46, 12, WHITE, LINE, 1.2)
+    c.setDash()
+    text(c, "Optional recommendations *", 720, 150, 11.5, FONT_MED, MUTED, "center")
 
     rounded(c, 112, 52, 736, 54, 14, WHITE, GREEN, 2)
     c.setFillColor(GREEN)
@@ -1076,6 +1083,16 @@ def slide_8(c: canvas.Canvas) -> None:
         FONT_SEMI,
         INK,
         "center",
+    )
+    text(
+        c,
+        "*  Drafted from the evidence bundle, then validated before anyone sees them.",
+        848,
+        30,
+        8,
+        FONT_REG,
+        MUTED,
+        "right",
     )
     c.showPage()
 

@@ -760,7 +760,7 @@ def draw_connectors(svg: SVG) -> None:
 
 def draw_footer(svg: SVG) -> None:
     svg.text(
-        "Solid = implemented flow · dashed = optional or in progress · ClickStack observes the "
+        "Solid = implemented flow · dashed = optional or in progress · telemetry observes the "
         "investigation, it never decides it",
         SAFE,
         852,

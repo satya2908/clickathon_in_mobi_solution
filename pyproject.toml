@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "verdict"
 version = "0.1.0"
-description = "Automated root-cause analyst for ad-tech metrics on ClickHouse"
+description = "Autonomous investigator agent for ad-tech metrics on ClickHouse"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
